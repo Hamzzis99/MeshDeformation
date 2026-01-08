@@ -4,17 +4,19 @@
 
 #define LOCTEXT_NAMESPACE "FMeshDeformationModule"
 
+// 로그 카테고리 정의
+DEFINE_LOG_CATEGORY(LogMeshDeform);
+
 void FMeshDeformationModule::StartupModule()
 {
-	// This code will execute after your module is loaded into memory; the exact timing is specified in the .uplugin file per-module
+	UE_LOG(LogMeshDeform, Log, TEXT("MeshDeformation 플러그인 모듈이 시작되었습니다."));
 }
 
 void FMeshDeformationModule::ShutdownModule()
 {
-	// This function may be called during shutdown to clean up your module.  For modules that support dynamic reloading,
-	// we call this function before unloading the module.
+	UE_LOG(LogMeshDeform, Log, TEXT("MeshDeformation 플러그인 모듈이 종료되었습니다."));
 }
 
 #undef LOCTEXT_NAMESPACE
-	
+    
 IMPLEMENT_MODULE(FMeshDeformationModule, MeshDeformation)

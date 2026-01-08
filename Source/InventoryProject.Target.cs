@@ -15,6 +15,8 @@ public class InventoryProjectTarget : TargetRules
 		// Include 순서를 5.7 기준으로 설정하여 컴파일 경고 및 오류 방지
 		IncludeOrderVersion = EngineIncludeOrderVersion.Unreal5_7;
 		
+		CppStandard = CppStandardVersion.Cpp20;
+		
 		ExtraModuleNames.Add("InventoryProject");
 	}
 }

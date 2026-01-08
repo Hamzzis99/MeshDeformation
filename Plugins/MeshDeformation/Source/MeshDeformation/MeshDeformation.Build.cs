@@ -26,7 +26,9 @@ public class MeshDeformation : ModuleRules
 			new string[]
 			{
 				"Core",
-				// ... add other public dependencies that you statically link with here ...
+				"GeometryFramework",
+				"GeometryCore",
+				"DynamicMesh"
 			}
 			);
 			
@@ -37,8 +39,7 @@ public class MeshDeformation : ModuleRules
 				"CoreUObject",
 				"Engine",
 				"Slate",
-				"SlateCore",
-				// ... add private dependencies that you statically link with here ...	
+				"SlateCore"
 			}
 			);
 		
