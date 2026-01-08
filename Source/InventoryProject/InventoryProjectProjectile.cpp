@@ -35,7 +35,7 @@ void AInventoryProjectProjectile::OnHit(UPrimitiveComponent* HitComponent, AActo
     if (!OtherActor || OtherActor == this || OtherActor == GetOwner()) return;
     
     // [MeshDeformation] 접두사가 붙은 한글 로그
-    UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [서버] 타격 발생! 대상: %s / 좌표: %s"), *OtherActor->GetName(), *Hit.ImpactPoint.ToString());
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [서버] 타격 발생! 대상: %s / 좌표: %s"), *OtherActor->GetName(), *Hit.ImpactPoint.ToString());
 
     // ApplyPointDamage로 상세 충돌 데이터 전송
     UGameplayStatics::ApplyPointDamage(
@@ -51,7 +51,7 @@ void AInventoryProjectProjectile::OnHit(UPrimitiveComponent* HitComponent, AActo
     // [MeshDeformation] 접두사가 붙은 화면 디버깅 메시지
     if (GEngine)
     {
-        FString DebugMsg = FString::Printf(TEXT("[MeshDeformation] [타격] %s (데미지: %.0f)"), *OtherActor->GetName(), DamageValue);
+        FString DebugMsg = FString::Printf(TEXT("[MDF] [타격] %s (데미지: %.0f)"), *OtherActor->GetName(), DamageValue);
         GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Cyan, DebugMsg);
     }
     

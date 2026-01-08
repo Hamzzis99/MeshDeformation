@@ -25,6 +25,14 @@ protected:
     void DeformMesh(UDynamicMeshComponent* MeshComp, const FVector& LocalLocation, const FVector& LocalDirection, float Damage);
 
 public:
+    /** 원본으로 사용할 StaticMesh 에셋 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "스태틱 메쉬(StaticMesh)"))
+    TObjectPtr<UStaticMesh> SourceStaticMesh;
+    
+    /** 에셋을 기반으로 DynamicMesh를 초기화하는 함수 */
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation")
+    void InitializeDynamicMesh();
+    
     /** 월드 좌표 -> 로컬 좌표 변환 */
     UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수학")
     FVector ConvertWorldToLocal(FVector WorldLocation);

@@ -30,7 +30,8 @@ public class MeshDeformation : ModuleRules
 				"Engine",
 				"GeometryFramework",
 				"GeometryCore",
-				"DynamicMesh"
+				"DynamicMesh",
+				"GeometryScriptingCore"
 			}
 		);
 			
