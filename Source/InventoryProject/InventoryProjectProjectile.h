@@ -24,7 +24,7 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "발사체 설정")
     class UStaticMeshComponent* ProjectileMesh;
 
-    /** 데미지 수치 (블루프린트에서 한글로 표시됨) */
+    /** 데미지 수치 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "발사체 설정|전투", meta = (DisplayName = "데미지 수치"))
     float DamageValue = 20.0f;
 
