@@ -7,6 +7,7 @@
 #include "UDynamicMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
 #include "GeometryScript/MeshAssetFunctions.h"
+#include "GeometryScript/MeshNormalsFunctions.h"
 
 
 UMDF_DeformableComponent::UMDF_DeformableComponent()
@@ -28,11 +29,11 @@ void UMDF_DeformableComponent::BeginPlay()
        {
           Owner->SetReplicates(true);
           Owner->SetReplicateMovement(true); 
-          UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [설정 변경] %s 액터의 복제를 강제로 활성화했습니다."), *Owner->GetName());
+          UE_LOG(LogTemp, Warning, TEXT("[MDF] [설정 변경] %s 액터의 복제를 강제로 활성화했습니다."), *Owner->GetName());
        }
 
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
-       UE_LOG(LogTemp, Log, TEXT("[MeshDeformation] [성공] %s 액터에 MDF 컴포넌트 부착됨."), *Owner->GetName());
+       UE_LOG(LogTemp, Log, TEXT("[MDF] [성공] %s 액터에 MDF 컴포넌트 부착됨."), *Owner->GetName());
     }
 }
 
@@ -62,7 +63,7 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
         DeformMesh(MeshComp, LocalHitLocation, LocalDirection, Damage);
 
         // [서버 로그] 성공 시 서버 로그에 확실히 기록 (클라이언트에선 안 보임)
-        UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [서버 변형 성공] 대상: %s / 위치: %s"), 
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [서버 변형 성공] 대상: %s / 위치: %s"), 
             *DamagedActor->GetName(), *LocalHitLocation.ToString());
 
         if (bShowDebugPoints)
@@ -80,7 +81,7 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     }
     else 
     {
-        UE_LOG(LogTemp, Error, TEXT("[MeshDeformation] 실패: DynamicMeshComponent를 찾을 수 없음!"));
+        UE_LOG(LogTemp, Error, TEXT("[MDF] 실패: DynamicMeshComponent를 찾을 수 없음!"));
     }
 }
 
@@ -106,6 +107,9 @@ void UMDF_DeformableComponent::DeformMesh(UDynamicMeshComponent* MeshComp, const
         }
     }, EDynamicMeshChangeType::DeformationEdit); //
 
+    // 노멀(법선)과 탄젠트를 다시 계산해야 찌그러진 부위의 음영이 정확히 보입니다.
+    UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
+    
     // 렌더링 및 물리 데이터 갱신 (클라이언트로 동기화 트리거)
     MeshComp->NotifyMeshUpdated();
 }
@@ -141,12 +145,12 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
 
         if (Outcome == EGeometryScriptOutcomePins::Success)
         {
-            UE_LOG(LogTemp, Log, TEXT("[MeshDeformation] %s 에셋 복사 성공!"), *SourceStaticMesh->GetName());
+            UE_LOG(LogTemp, Log, TEXT("[MDF] %s 에셋 복사 성공!"), *SourceStaticMesh->GetName());
             MeshComp->NotifyMeshUpdated();
         }
         else
         {
-            UE_LOG(LogTemp, Error, TEXT("[MeshDeformation] 메쉬 복사 실패"));
+            UE_LOG(LogTemp, Error, TEXT("[MDF] 메쉬 복사 실패"));
         }
     }
 }
