@@ -2,18 +2,18 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "DeformableComponent.generated.h"
+#include "MDF_DeformableComponent.generated.h"
 
 /**
  * [MeshDeformation] 메쉬 변형을 담당하는 컴포넌트입니다.
  */
 UCLASS(Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
-class MESHDEFORMATION_API UDeformableComponent : public UActorComponent
+class MESHDEFORMATION_API UMDF_DeformableComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
 public: 
-	UDeformableComponent();
+	UMDF_DeformableComponent();
 
 protected:
 	virtual void BeginPlay() override;

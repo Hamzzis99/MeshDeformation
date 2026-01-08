@@ -1,14 +1,14 @@
-﻿#include "Components/DeformableComponent.h"
+﻿#include "Components/MDF_DeformableComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/Engine.h"
 
-UDeformableComponent::UDeformableComponent()
+UMDF_DeformableComponent::UMDF_DeformableComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true; 
 	SetIsReplicatedByDefault(true);
 }
 
-void UDeformableComponent::BeginPlay()
+void UMDF_DeformableComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
@@ -23,17 +23,17 @@ void UDeformableComponent::BeginPlay()
 			UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [설정 변경] %s 액터의 복제를 강제로 활성화했습니다."), *Owner->GetName());
 		}
 
-		Owner->OnTakePointDamage.AddDynamic(this, &UDeformableComponent::HandlePointDamage);
+		Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
 		UE_LOG(LogTemp, Log, TEXT("[MeshDeformation] [성공] %s 액터에 컴포넌트가 부착되었습니다."), *Owner->GetName());
 	}
 }
 
-void UDeformableComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
+void UMDF_DeformableComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
 }
 
-void UDeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
+void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
 {
 	if (!bIsDeformationEnabled || Damage <= 0.0f) return;
 
