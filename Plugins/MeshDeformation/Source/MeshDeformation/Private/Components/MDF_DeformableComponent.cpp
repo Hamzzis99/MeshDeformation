@@ -116,25 +116,26 @@ void UMDF_DeformableComponent::DeformMesh(UDynamicMeshComponent* MeshComp, const
 
 void UMDF_DeformableComponent::InitializeDynamicMesh()
 {
+    // 1. 소스 메시 유효성 검사
     if (!IsValid(SourceStaticMesh)) return;
 
     AActor* Owner = GetOwner();
+    if (!IsValid(Owner)) return;
+
+    // 2. 부모 액터에서 다이나믹 메시 컴포넌트 찾기
     UDynamicMeshComponent* MeshComp = Owner->FindComponentByClass<UDynamicMeshComponent>();
 
     if (IsValid(MeshComp) && IsValid(MeshComp->GetDynamicMesh()))
     {
-        // [해결 1] FGeometryScriptCopyMeshFromAssetOptions 사용
         FGeometryScriptCopyMeshFromAssetOptions AssetOptions;
-        AssetOptions.bApplyBuildSettings = true; // 기본값 설정
+        AssetOptions.bApplyBuildSettings = true;
 
-        // [해결 2] FGeometryScriptMeshReadLOD 사용
         FGeometryScriptMeshReadLOD RequestedLOD;
         RequestedLOD.LODIndex = 0;
 
-        // [해결 3] 결과를 받을 Outcome 변수 선언
         EGeometryScriptOutcomePins Outcome;
 
-        // 업로드된 파일의 147라인 함수 호출
+        // 3. 에셋으로부터 메시 데이터 복사
         UGeometryScriptLibrary_StaticMeshFunctions::CopyMeshFromStaticMesh(
             SourceStaticMesh, 
             MeshComp->GetDynamicMesh(), 
@@ -145,12 +146,20 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
 
         if (Outcome == EGeometryScriptOutcomePins::Success)
         {
-            UE_LOG(LogTemp, Log, TEXT("[MDF] %s 에셋 복사 성공!"), *SourceStaticMesh->GetName());
+            // [추가] 4. 노멀 및 탄젠트 재계산 (찌그러짐이 입체적으로 보이게 함)
+            // 에디터 프리뷰와 게임 런타임 모두에서 깔끔한 음영을 보장합니다.
+            FGeometryScriptCalculateNormalsOptions NormalOptions;
+            UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), NormalOptions);
+
+            // 5. 변경 사항 알림 (렌더링 및 물리 데이터 동기화)
             MeshComp->NotifyMeshUpdated();
+            
+            UE_LOG(LogTemp, Log, TEXT("[MDF] %s 프리뷰 메시 초기화 성공 (Actor: %s)"), 
+                *SourceStaticMesh->GetName(), *Owner->GetName());
         }
         else
         {
-            UE_LOG(LogTemp, Error, TEXT("[MDF] 메쉬 복사 실패"));
+            UE_LOG(LogTemp, Error, TEXT("[MDF] 메시 복사 실패"));
         }
     }
 }
