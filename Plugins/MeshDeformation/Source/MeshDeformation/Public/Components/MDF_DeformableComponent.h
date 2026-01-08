@@ -27,9 +27,13 @@ struct FMDFHitData
     UPROPERTY()
     float Damage;
 
-    FMDFHitData() : LocalLocation(FVector::ZeroVector), LocalDirection(FVector::ZeroVector), Damage(0.0f) {}
-    FMDFHitData(FVector InLoc, FVector InDir, float InDamage) 
-        : LocalLocation(InLoc), LocalDirection(InDir), Damage(InDamage) {}
+    // 추가: 어떤 종류의 데미지인지 저장
+    UPROPERTY()
+    TSubclassOf<UDamageType> DamageTypeClass;
+
+    FMDFHitData() : LocalLocation(FVector::ZeroVector), LocalDirection(FVector::ForwardVector), Damage(0.f), DamageTypeClass(nullptr) {}
+    FMDFHitData(FVector Loc, FVector Dir, float Dmg, TSubclassOf<UDamageType> DmgType) 
+        : LocalLocation(Loc), LocalDirection(Dir), Damage(Dmg), DamageTypeClass(DmgType) {}
 };
 
 UCLASS(Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
@@ -101,6 +105,14 @@ public:
     /** [MeshDeformation|Effect] 3D 사운드 거리 감쇄 설정 (여기서 거리에 따른 소리 크기 제어) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "사운드 감쇄 설정(3D Attenuation)"))
     TObjectPtr<USoundAttenuation> ImpactAttenuation;
+    
+    /** [MeshDeformation|설정] 원거리 공격 판정용 클래스 (예: BP_DamageType_Ranged) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
+    TSubclassOf<UDamageType> RangedDamageType;
+
+    /** [MeshDeformation|설정] 근접 공격 판정용 클래스 (예: BP_DamageType_Melee) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
+    TSubclassOf<UDamageType> MeleeDamageType;
     
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
