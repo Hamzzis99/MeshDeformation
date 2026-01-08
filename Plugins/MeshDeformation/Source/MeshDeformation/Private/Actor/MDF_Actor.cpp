@@ -1,4 +1,5 @@
-﻿// Gihyeon's Inventory Project (Helluna)
+﻿// Gihyeon's Deformation Project (Helluna)
+
 #include "Actor/MDF_Actor.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/MDF_DeformableComponent.h"
@@ -21,9 +22,13 @@ AMDF_Actor::AMDF_Actor()
         // [해결책] ECollisionComplexity 심볼 에러를 피하기 위해 전용 함수를 사용합니다.
         // 이 함수는 내부적으로 ComplexAsSimple 설정을 안전하게 처리합니다.
         DynamicMeshComponent->SetComplexAsSimpleCollisionEnabled(true, true);
-
+        
         // 정적 구조물로서의 역할을 위해 물리 시뮬레이션(중력 등)은 끕니다.
         DynamicMeshComponent->SetSimulatePhysics(false);
+        
+        // [Step 6 최적화] 이 한 줄을 추가하는 것이 맞습니다.
+        // 찌그러질 때마다 발생하는 물리 계산을 백그라운드 스레드로 던져서 렉(Hitch)을 방지합니다.
+        DynamicMeshComponent->bUseAsyncCooking = true;
     }
 
     // 3. 변형 로직 컴포넌트 생성

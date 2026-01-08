@@ -1,4 +1,4 @@
-// Copyright Epic Games, Inc. All Rights Reserved.
+// Gihyeon's Deformation Project (Helluna)
 
 #include "MeshDeformation.h"
 
