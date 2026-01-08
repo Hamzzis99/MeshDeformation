@@ -26,9 +26,12 @@ public class MeshDeformation : ModuleRules
 			new string[]
 			{
 				"Core",
-				"GeometryFramework",
-				"GeometryCore",
-				"DynamicMesh"
+				"CoreUObject",
+				"Engine",
+				"InputCore",
+				"GeometryFramework",   // DynamicMeshComponent가 포함된 모듈
+				"DynamicMesh",        // 메쉬 데이터 연산을 위한 모듈
+				"ModelingComponents"  // 메쉬 변형 관련 컴포넌트 도구
 			}
 			);
 			
