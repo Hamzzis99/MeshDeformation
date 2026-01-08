@@ -31,7 +31,8 @@ public class MeshDeformation : ModuleRules
 				"GeometryFramework",
 				"GeometryCore",
 				"DynamicMesh",
-				"GeometryScriptingCore"
+				"GeometryScriptingCore",
+				"Niagara",
 			}
 		);
 			

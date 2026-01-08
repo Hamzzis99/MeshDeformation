@@ -7,6 +7,8 @@
 #include "MDF_DeformableComponent.generated.h"
 
 class UDynamicMeshComponent;
+class UNiagaraSystem;
+class USoundBase;
 
 /** * [Step 6 최적화] 타격 데이터를 임시 저장하기 위한 구조체 
  * 루프 횟수를 줄이기 위해 여러 타격 지점을 이 구조체에 담아 한 번에 처리합니다.
@@ -87,6 +89,18 @@ public:
      */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "배칭 처리 대기 시간"))
     float BatchProcessDelay = 0.0f;
+    
+    /** [MeshDeformation|Effect] 변형 시 발생할 나이아가라 파편 시스템 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "파편 이펙트(Niagara)"))
+    TObjectPtr<UNiagaraSystem> DebrisSystem;
+
+    /** [MeshDeformation|Effect] 피격 시 재생될 3D 사운드 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "피격 사운드(3D)"))
+    TObjectPtr<USoundBase> ImpactSound;
+    
+    /** [MeshDeformation|Effect] 3D 사운드 거리 감쇄 설정 (여기서 거리에 따른 소리 크기 제어) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "사운드 감쇄 설정(3D Attenuation)"))
+    TObjectPtr<USoundAttenuation> ImpactAttenuation;
     
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
