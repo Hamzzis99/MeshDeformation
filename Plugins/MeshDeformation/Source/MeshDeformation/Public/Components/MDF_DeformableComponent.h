@@ -4,34 +4,46 @@
 #include "Components/ActorComponent.h"
 #include "MDF_DeformableComponent.generated.h"
 
-/**
- * [MeshDeformation] 메쉬 변형을 담당하는 컴포넌트입니다.
- */
+class UDynamicMeshComponent;
+
 UCLASS(Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class MESHDEFORMATION_API UMDF_DeformableComponent : public UActorComponent
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 
 public: 
-	UMDF_DeformableComponent();
+    UMDF_DeformableComponent();
 
 protected:
-	virtual void BeginPlay() override;
+    virtual void BeginPlay() override;
 
-	/** [MeshDeformation] 포인트 데미지 수신 및 좌표 변환 처리 */
-	UFUNCTION()
-	virtual void HandlePointDamage(AActor* DamagedActor, float Damage, class AController* InstigatedBy, FVector HitLocation, class UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const class UDamageType* DamageType, AActor* DamageCauser);
+    /** [MeshDeformation] 포인트 데미지 수신 및 변형 처리 */
+    UFUNCTION()
+    virtual void HandlePointDamage(AActor* DamagedActor, float Damage, class AController* InstigatedBy, FVector HitLocation, class UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const class UDamageType* DamageType, AActor* DamageCauser);
+
+    /** [MeshDeformation] 실제 버텍스 변형 연산 */
+    void DeformMesh(UDynamicMeshComponent* MeshComp, const FVector& LocalLocation, const FVector& LocalDirection, float Damage);
 
 public:
-	/** [MeshDeformation] 월드 좌표를 메쉬 로컬 좌표로 변환하는 헬퍼 함수 */
-	UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수학")
-	FVector ConvertWorldToLocal(FVector WorldLocation);
+    /** 월드 좌표 -> 로컬 좌표 변환 */
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수학")
+    FVector ConvertWorldToLocal(FVector WorldLocation);
 
-	/** 시스템 활성화 여부 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "시스템 활성화"))
-	bool bIsDeformationEnabled = true;
+    /** 월드 방향 -> 로컬 방향 변환 */
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수학")
+    FVector ConvertWorldDirectionToLocal(FVector WorldDirection);
 
-	/** 디버그용 구체 그리기 여부 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|디버그", meta = (DisplayName = "디버그 포인트 표시"))
-	bool bShowDebugPoints = true;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "시스템 활성화"))
+    bool bIsDeformationEnabled = true;
+
+    /** 타격 지점 주변의 변형 반경 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 반경"))
+    float DeformRadius = 30.0f;
+
+    /** 타격 시 안으로 밀려 들어가는 강도 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 강도"))
+    float DeformStrength = 5.0f;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|디버그", meta = (DisplayName = "디버그 포인트 표시"))
+    bool bShowDebugPoints = true;
 };

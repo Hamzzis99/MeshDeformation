@@ -25,6 +25,14 @@
 		{
 			"Name": "GeometryProcessing",
 			"Enabled": true
+		},
+		{
+			"Name": "GeometryScripting",
+			"Enabled": true
+		},
+		{
+			"Name": "Avalanche",
+			"Enabled": true
 		}
 	]
 }

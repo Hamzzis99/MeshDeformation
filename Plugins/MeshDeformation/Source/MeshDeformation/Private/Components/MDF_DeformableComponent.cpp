@@ -1,13 +1,15 @@
 ﻿#include "Components/MDF_DeformableComponent.h"
 #include "GameFramework/Actor.h"
 #include "Engine/Engine.h"
-#include "DrawDebugHelpers.h" // 디버그 드로잉을 위해 추가
+#include "DrawDebugHelpers.h"
+
+#include "Components/DynamicMeshComponent.h"
+#include "UDynamicMesh.h"
+#include "DynamicMesh/DynamicMesh3.h"
 
 UMDF_DeformableComponent::UMDF_DeformableComponent()
 {
     PrimaryComponentTick.bCanEverTick = false; 
-
-    // 컴포넌트 복제 활성화
     SetIsReplicatedByDefault(true);
 }
 
@@ -16,54 +18,70 @@ void UMDF_DeformableComponent::BeginPlay()
     Super::BeginPlay();
 
     AActor* Owner = GetOwner();
-    if (Owner)
+    if (IsValid(Owner))
     {
-       // 복제 강제 활성화 (서버/클라이언트 동기화 보장)
-       if (!Owner->GetIsReplicated())
+       if (Owner->HasAuthority() && !Owner->GetIsReplicated())
        {
           Owner->SetReplicates(true);
           Owner->SetReplicateMovement(true); 
           UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [설정 변경] %s 액터의 복제를 강제로 활성화했습니다."), *Owner->GetName());
        }
 
-       // 데미지 델리게이트 바인딩
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
-       UE_LOG(LogTemp, Log, TEXT("[MeshDeformation] [성공] %s 액터에 MDF 컴포넌트가 부착되었습니다."), *Owner->GetName());
+       UE_LOG(LogTemp, Log, TEXT("[MeshDeformation] [성공] %s 액터에 MDF 컴포넌트 부착됨."), *Owner->GetName());
     }
 }
 
 void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
 {
-    // 시스템 활성화 체크 및 데미지 유효성 검사
-    if (!bIsDeformationEnabled || !DamagedActor || Damage <= 0.0f) return;
+    // High Safety: 서버 권한 검사 필수
+    if (!bIsDeformationEnabled || !IsValid(DamagedActor) || !DamagedActor->HasAuthority() || Damage <= 0.0f) return;
 
-    // [Step 3-1] 월드 좌표를 로컬 좌표로 변환
-    FVector LocalHitLocation = ConvertWorldToLocal(HitLocation);
-
-    // [Step 3-2] 상세 분석 로그 출력
-    UE_LOG(LogTemp, Warning, TEXT("[MeshDeformation] [데미지 수신] 대상: %s / 데미지: %.1f"), *DamagedActor->GetName(), Damage);
-    UE_LOG(LogTemp, Log, TEXT("   > 월드 좌표: %s"), *HitLocation.ToString());
-    UE_LOG(LogTemp, Log, TEXT("   > 로컬 좌표: %s"), *LocalHitLocation.ToString());
-
-    // [Step 3-3] 시각적 디버깅
-    if (bShowDebugPoints)
+    UDynamicMeshComponent* MeshComp = DamagedActor->FindComponentByClass<UDynamicMeshComponent>();
+    if (IsValid(MeshComp))
     {
-        // 타격 지점에 3초 동안 유지되는 빨간 점 생성
-        DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
-        
-        if (GEngine)
+        const FVector LocalHitLocation = ConvertWorldToLocal(HitLocation);
+        const FVector LocalDirection = ConvertWorldDirectionToLocal(ShotFromDirection);
+
+        DeformMesh(MeshComp, LocalHitLocation, LocalDirection, Damage);
+
+        if (bShowDebugPoints)
         {
-           GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Green, 
-              FString::Printf(TEXT("[MeshDeformation] 로컬 타격 좌표: %s"), *LocalHitLocation.ToString()));
+            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
         }
     }
 }
 
+void UMDF_DeformableComponent::DeformMesh(UDynamicMeshComponent* MeshComp, const FVector& LocalLocation, const FVector& LocalDirection, float Damage)
+{
+    if (!IsValid(MeshComp) || !MeshComp->GetDynamicMesh()) return;
+
+    // [수정] 사용자님의 UDynamicMesh.h 규격에 맞춰 EDynamicMeshChangeType을 사용합니다.
+    MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
+    {
+        for (int32 VertexID : EditMesh.VertexIndicesItr())
+        {
+            FVector3d VertexPos = EditMesh.GetVertex(VertexID);
+            double Distance = FVector3d::Distance(VertexPos, (FVector3d)LocalLocation);
+
+            if (Distance < (double)DeformRadius)
+            {
+                double Falloff = 1.0 - (Distance / (double)DeformRadius);
+                FVector3d Offset = (FVector3d)LocalDirection * (double)(DeformStrength * Falloff);
+                EditMesh.SetVertex(VertexID, VertexPos + Offset);
+            }
+        }
+    }, EDynamicMeshChangeType::DeformationEdit); // [핵심 수정 부분]
+
+    MeshComp->NotifyMeshUpdated();
+}
+
 FVector UMDF_DeformableComponent::ConvertWorldToLocal(FVector WorldLocation)
 {
-    if (!GetOwner()) return WorldLocation;
+    return IsValid(GetOwner()) ? GetOwner()->GetActorTransform().InverseTransformPosition(WorldLocation) : WorldLocation;
+}
 
-    // 역행렬 변환: $Local = World \times ActorInverseTransform$
-    // 액터가 회전하거나 이동해도 메쉬 내부의 일관된 좌표를 얻을 수 있습니다.
-    return GetOwner()->GetActorTransform().InverseTransformPosition(WorldLocation);
+FVector UMDF_DeformableComponent::ConvertWorldDirectionToLocal(FVector WorldDirection)
+{
+    return IsValid(GetOwner()) ? GetOwner()->GetActorTransform().InverseTransformVector(WorldDirection) : WorldDirection;
 }
