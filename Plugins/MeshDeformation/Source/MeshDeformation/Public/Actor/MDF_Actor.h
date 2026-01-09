@@ -30,8 +30,4 @@ public:
 	// 변형 로직을 담당하는 핵심 컴포넌트
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MDF", meta = (AllowPrivateAccess = "true"))
 	UMDF_DeformableComponent* DeformableComponent;
-
-	// [새로운 기능] 에디터 디테일 패널에서 직접 머터리얼을 꽂을 수 있는 변수
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Rendering", meta = (DisplayName = "테스트용 머터리얼"))
-	TObjectPtr<UMaterialInterface> TestMaterial;
 };

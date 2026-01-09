@@ -1,7 +1,6 @@
 ﻿// Gihyeon's Deformation Project (Helluna)
 
 #include "Actor/MDF_Actor.h"
-#include "PhysicsEngine/BodySetup.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/MDF_DeformableComponent.h"
 
@@ -51,23 +50,9 @@ void AMDF_Actor::OnConstruction(const FTransform& Transform)
         DeformableComponent->InitializeDynamicMesh();
     }
 
-    // 충돌 상태 및 머터리얼 갱신
+    // 충돌 상태가 뷰포트에서 즉시 갱신되도록 합니다.
     if (DynamicMeshComponent)
     {
-        // 컴포넌트가 초기화된 직후, 강제로 거울 모드 충돌(음수 스케일 허용)을 켜줍니다.
-        UBodySetup* BodySetup = DynamicMeshComponent->GetBodySetup();
-        if (BodySetup)
-        {
-            BodySetup->bGenerateMirroredCollision = true; 
-        }
-        
-        // 다이나믹 메시가 초기화된 직후에 실행되므로 안전하게 적용됩니다.
-        if (TestMaterial)
-        {
-            DynamicMeshComponent->SetMaterial(0, TestMaterial);
-        }
-
-        // 설정을 변경했으니 충돌을 업데이트합니다.
         DynamicMeshComponent->UpdateCollision(true);
     }
 }

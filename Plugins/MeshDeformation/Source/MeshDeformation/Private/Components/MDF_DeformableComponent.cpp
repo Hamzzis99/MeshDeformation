@@ -7,15 +7,15 @@
 #include "TimerManager.h"
 #include "Kismet/GameplayStatics.h" 
 
-// 다이나믹 메시 및 속성 제어 관련
+// 다이나믹 메시 관련 헤더
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
-#include "DynamicMesh/DynamicMeshAttributeSet.h" // [중요] Vertex Color 제어용 헤더
+// #include "DynamicMesh/DynamicMeshAttributeSet.h" // 머터리얼(색상) 제어용 헤더는 삭제함
 #include "GeometryScript/MeshAssetFunctions.h"
 #include "GeometryScript/MeshNormalsFunctions.h"
 
-// 나이아가라 관련
+// 나이아가라 관련 헤더
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h"
 
@@ -49,30 +49,9 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     if (!bIsDeformationEnabled || !IsValid(DamagedActor) || Damage <= 0.0f) return;
     if (!DamagedActor->HasAuthority()) return;
 
-    // [디버깅 로직 업그레이드] 
-    // 들어온 데미지 타입이 내가 설정한 원거리/근접 타입과 일치하는지 검사합니다.
-    FString TypeResult = TEXT("알 수 없음 (Unknown)");
-    UClass* IncomingTypeClass = IsValid(DamageType) ? DamageType->GetClass() : nullptr;
-
-    if (IncomingTypeClass)
-    {
-        // IsChildOf를 쓰면 상속받은 자식 클래스여도 다 알아봅니다 (더 안전함)
-        if (RangedDamageType && IncomingTypeClass->IsChildOf(RangedDamageType))
-        {
-            TypeResult = TEXT("원거리 공격 (Ranged)");
-        }
-        else if (MeleeDamageType && IncomingTypeClass->IsChildOf(MeleeDamageType))
-        {
-            TypeResult = TEXT("근접 공격 (Melee)");
-        }
-    }
-
-    // 업그레이드된 로그: 데미지 양, 들어온 클래스 이름, 그리고 판정 결과까지 출력
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지: %.1f / 클래스: %s / 판정결과: %s"), 
-        Damage, 
-        *GetNameSafe(IncomingTypeClass), 
-        *TypeResult
-    );
+    // 디버그 로그: 어떤 데미지 타입이 들어왔는지 확인
+    FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s"), Damage, *DmgTypeName);
 
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
@@ -82,7 +61,8 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
 
     if (IsValid(MeshComp))
     {
-        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, IncomingTypeClass));
+        // 데미지 타입 클래스 정보를 함께 큐에 저장
+        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType->GetClass()));
 
         if (!BatchTimerHandle.IsValid())
         {
@@ -90,23 +70,17 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
             GetWorld()->GetTimerManager().SetTimer(BatchTimerHandle, this, &UMDF_DeformableComponent::ProcessDeformationBatch, Delay, false);
         }
 
-        // 판정 결과에 따라 디버그 포인트 색상도 다르게! (원거리=빨강, 근접=초록, 기타=노랑)
         if (bShowDebugPoints)
         {
-            FColor DebugColor = FColor::Yellow;
-            if (TypeResult.Contains(TEXT("원거리"))) DebugColor = FColor::Red;
-            else if (TypeResult.Contains(TEXT("근접"))) DebugColor = FColor::Green;
-
-            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, DebugColor, false, 3.0f);
+            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
         }
     }
 }
 
-/** * [성능 최적화 및 시각/청각/데이터 마스크 적용] 
- * 1. 버텍스 변형 (SQRT 최적화)
- * 2. 버텍스 컬러 데이터 기록 (쉐이더용 마스크: R-원거리, G-근접)
- * 3. 3D 사운드 재생 (거리 감쇄 적용)
- * 4. 나이아가라 파편 효과 스폰
+/** * [최적화된 배칭 처리 함수]
+ * 1. 머터리얼(색상) 로직 삭제됨 -> 오직 물리적 변형(위치 이동)만 수행
+ * 2. 데미지 타입에 따라 변형 강도(깊이) 조절
+ * 3. 나이아가라 이펙트 및 사운드 재생 유지
  */
 void UMDF_DeformableComponent::ProcessDeformationBatch()
 {
@@ -122,91 +96,68 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
         const double InverseRadius = 1.0 / (double)DeformRadius;
         const FTransform& ComponentTransform = MeshComp->GetComponentTransform();
 
-        // --- [Part 1: 메시 변형 및 정점 색상 데이터 기록] ---
+        // --- [Part 1: 순수 메시 변형 (Deformation Only)] ---
         MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
         {
-            // 속성 활성화
-            if (!EditMesh.HasAttributes()) { EditMesh.EnableAttributes(); }
-            if (!EditMesh.Attributes()->HasPrimaryColors()) { EditMesh.Attributes()->EnablePrimaryColors(); }
-            auto* ColorAttrib = EditMesh.Attributes()->PrimaryColors();
-
-            // [반론의 핵심 - 최적화 1] 
-            // TArray를 루프 '밖'에 선언합니다. (Heap Allocation 1회 발생)
-            // 비평가의 "안전함"을 챙기면서, 저의 "성능(무할당)" 주장을 관철시키는 방법입니다.
-            TArray<int32> ElementIDs; 
+            // Vertex Color 관련 초기화 코드 삭제됨
 
             for (int32 VertexID : EditMesh.VertexIndicesItr())
             {
                 FVector3d VertexPos = EditMesh.GetVertex(VertexID);
                 FVector3d TotalOffset(0.0, 0.0, 0.0);
                 
-                // ... (거리 계산 로직은 기존과 동일) ...
-                FVector4f TargetMask(0.f, 0.f, 0.f, 1.f);
                 bool bModified = false;
 
                 for (const FMDFHitData& Hit : HitQueue)
                 {
-                    // ... (거리 체크 및 TargetMask 계산) ...
                     double DistSq = FVector3d::DistSquared(VertexPos, (FVector3d)Hit.LocalLocation);
                     if (DistSq < RadiusSq)
                     {
                         double Distance = FMath::Sqrt(DistSq);
                         double Falloff = 1.0 - (Distance * InverseRadius);
                         
-                        TotalOffset += (FVector3d)Hit.LocalDirection * (double)(DeformStrength * Falloff);
+                        // [데미지 타입 활용 로직]
+                        // 색칠 대신 '강도'를 조절합니다.
+                        float CurrentStrength = DeformStrength;
 
-                        if (Hit.DamageTypeClass == RangedDamageType)
-                            TargetMask.X = FMath::Max(TargetMask.X, (float)Falloff);
-                        else if (Hit.DamageTypeClass == MeleeDamageType)
-                            TargetMask.Y = FMath::Max(TargetMask.Y, (float)Falloff);
-                        
+                        // 근접 공격(Melee)이면 2배 더 깊게 파임
+                        if (Hit.DamageTypeClass && MeleeDamageType && Hit.DamageTypeClass->IsChildOf(MeleeDamageType)) 
+                        {
+                            CurrentStrength *= 2.0f;
+                        }
+                        // 원거리 공격(Ranged)이면 0.5배만 파임 (작은 탄흔)
+                        else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
+                        {
+                            CurrentStrength *= 0.5f; 
+                        }
+
+                        // 변형 적용
+                        TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
                         bModified = true;
                     }
                 }
                 
                 if (bModified)
                 {
-                    // 1. 위치 업데이트
+                    // 위치만 업데이트 (색상 관련 함수 호출 삭제됨)
                     EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
-
-                    // [반론의 핵심 - 최적화 2] 
-                    // 배열을 새로 만드는 게 아니라, 내용만 비우고(Reset) 메모리는 그대로 씁니다.
-                    // 이렇게 하면 VertexID -> ElementID 변환을 안전하게 수행하면서도 
-                    // 메모리 할당/해제(malloc/free) 부하가 전혀 없습니다.
-                    ElementIDs.Reset(); 
-                    
-                    // 2. 안전한 다리 건너기 (VertexID -> ElementIDs)
-                    ColorAttrib->GetVertexElements(VertexID, ElementIDs);
-
-                    // 3. 색상 적용 (이제 ElementID를 쓰므로 크래시 걱정 없음)
-                    for (int32 ElementID : ElementIDs)
-                    {
-                        FVector4f CurrentColor = ColorAttrib->GetElement(ElementID);
-
-                        FVector4f FinalColor(
-                            FMath::Max(CurrentColor.X, TargetMask.X),
-                            FMath::Max(CurrentColor.Y, TargetMask.Y),
-                            CurrentColor.Z,
-                            1.f
-                        );
-
-                        ColorAttrib->SetElement(ElementID, FinalColor);
-                    }
                 }
             }
         }, EDynamicMeshChangeType::GeneralEdit);
 
-        // --- [Part 2: 시각 및 청각 효과 재생] ---
+        // --- [Part 2: 시각(Niagara) 및 청각(Sound) 효과 재생 - 유지됨] ---
         for (const FMDFHitData& Hit : HitQueue)
         {
             FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
             FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
 
+            // 나이아가라 파편 효과
             if (IsValid(DebrisSystem))
             {
                 UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
             }
 
+            // 타격 사운드
             if (IsValid(ImpactSound))
             {
                 UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
@@ -218,7 +169,7 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
         MeshComp->UpdateCollision();
         MeshComp->NotifyMeshUpdated();
 
-        UE_LOG(LogTemp, Warning, TEXT("[MDF] [최적화] %d개의 타격 처리 및 데이터 맵 작성 완료."), HitQueue.Num());
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [최적화] %d개의 타격 처리 완료 (머터리얼 로직 제외됨)."), HitQueue.Num());
     }
 
     HitQueue.Empty();
@@ -226,7 +177,6 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
 
 void UMDF_DeformableComponent::InitializeDynamicMesh()
 {
-    // [중요] 블루프린트에서 SourceStaticMesh를 안 넣으면 함수가 여기서 멈춥니다! 꼭 넣어주세요.
     if (!IsValid(SourceStaticMesh)) return;
 
     AActor* Owner = GetOwner();
@@ -244,33 +194,6 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
 
         if (Outcome == EGeometryScriptOutcomePins::Success)
         {
-            // ▼▼▼▼▼ [여기서부터 추가된 핵심 코드입니다] ▼▼▼▼▼
-            
-            // 1. 에디터에서 설정한 초기 색상 가져오기 (헤더에 변수가 없다면 FLinearColor::Black 쓰세요)
-            FVector4f BaseColorVector = FVector4f(0.f, 0.f, 0.f, 1.f); // 기본 검은색
-            
-            // 만약 헤더에 InitialVertexColor 변수를 추가했다면 아래 주석을 푸세요.
-            // BaseColorVector = FVector4f(InitialVertexColor); 
-
-            // 2. 메쉬의 모든 점을 이 색으로 칠해버리기 (초기화)
-            MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh)
-            {
-                // 색상 저장 공간이 없으면 만듭니다.
-                if (!EditMesh.HasAttributes()) { EditMesh.EnableAttributes(); }
-                if (!EditMesh.Attributes()->HasPrimaryColors()) { EditMesh.Attributes()->EnablePrimaryColors(); }
-                
-                auto* ColorAttrib = EditMesh.Attributes()->PrimaryColors();
-                
-                // 모든 정점(Vertex)을 돌면서 색을 덮어씁니다.
-                for (int32 ElementID : ColorAttrib->ElementIndicesItr())
-                {
-                    ColorAttrib->SetElement(ElementID, BaseColorVector);
-                }
-
-            }, EDynamicMeshChangeType::AttributeEdit);
-            
-            // ▲▲▲▲▲ [여기까지가 핵심입니다] ▲▲▲▲▲
-
             UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
             MeshComp->UpdateCollision();
             MeshComp->NotifyMeshUpdated();
