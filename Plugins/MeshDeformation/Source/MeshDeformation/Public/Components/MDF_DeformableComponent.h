@@ -114,6 +114,10 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
     TSubclassOf<UDamageType> MeleeDamageType;
     
+    /** [설정] 게임 시작 시 메쉬에 칠해질 기본 배경색 (기본값: 검은색) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "초기 버텍스 컬러"))
+    FLinearColor InitialVertexColor = FLinearColor(0.f, 0.f, 0.f, 1.f);
+    
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
     TArray<FMDFHitData> HitQueue;

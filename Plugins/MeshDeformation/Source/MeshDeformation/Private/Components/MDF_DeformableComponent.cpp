@@ -226,6 +226,7 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
 
 void UMDF_DeformableComponent::InitializeDynamicMesh()
 {
+    // [중요] 블루프린트에서 SourceStaticMesh를 안 넣으면 함수가 여기서 멈춥니다! 꼭 넣어주세요.
     if (!IsValid(SourceStaticMesh)) return;
 
     AActor* Owner = GetOwner();
@@ -243,6 +244,33 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
 
         if (Outcome == EGeometryScriptOutcomePins::Success)
         {
+            // ▼▼▼▼▼ [여기서부터 추가된 핵심 코드입니다] ▼▼▼▼▼
+            
+            // 1. 에디터에서 설정한 초기 색상 가져오기 (헤더에 변수가 없다면 FLinearColor::Black 쓰세요)
+            FVector4f BaseColorVector = FVector4f(0.f, 0.f, 0.f, 1.f); // 기본 검은색
+            
+            // 만약 헤더에 InitialVertexColor 변수를 추가했다면 아래 주석을 푸세요.
+            // BaseColorVector = FVector4f(InitialVertexColor); 
+
+            // 2. 메쉬의 모든 점을 이 색으로 칠해버리기 (초기화)
+            MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh)
+            {
+                // 색상 저장 공간이 없으면 만듭니다.
+                if (!EditMesh.HasAttributes()) { EditMesh.EnableAttributes(); }
+                if (!EditMesh.Attributes()->HasPrimaryColors()) { EditMesh.Attributes()->EnablePrimaryColors(); }
+                
+                auto* ColorAttrib = EditMesh.Attributes()->PrimaryColors();
+                
+                // 모든 정점(Vertex)을 돌면서 색을 덮어씁니다.
+                for (int32 ElementID : ColorAttrib->ElementIndicesItr())
+                {
+                    ColorAttrib->SetElement(ElementID, BaseColorVector);
+                }
+
+            }, EDynamicMeshChangeType::AttributeEdit);
+            
+            // ▲▲▲▲▲ [여기까지가 핵심입니다] ▲▲▲▲▲
+
             UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
             MeshComp->UpdateCollision();
             MeshComp->NotifyMeshUpdated();

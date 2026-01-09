@@ -24,13 +24,6 @@ AMDF_Actor::AMDF_Actor()
         // 이 함수는 내부적으로 ComplexAsSimple 설정을 안전하게 처리합니다.
         DynamicMeshComponent->SetComplexAsSimpleCollisionEnabled(true, true);
         
-        // 음수여도 다이나믹 메시에게 괜찮다는 것을 알리는 것.
-        UBodySetup* BodySetup = DynamicMeshComponent->GetBodySetup();
-        if (BodySetup)
-        {
-            BodySetup->bGenerateMirroredCollision = true; 
-        }
-        
         // 정적 구조물로서의 역할을 위해 물리 시뮬레이션(중력 등)은 끕니다.
         DynamicMeshComponent->SetSimulatePhysics(false);
         
@@ -58,9 +51,23 @@ void AMDF_Actor::OnConstruction(const FTransform& Transform)
         DeformableComponent->InitializeDynamicMesh();
     }
 
-    // 충돌 상태가 뷰포트에서 즉시 갱신되도록 합니다.
+    // 충돌 상태 및 머터리얼 갱신
     if (DynamicMeshComponent)
     {
+        // 컴포넌트가 초기화된 직후, 강제로 거울 모드 충돌(음수 스케일 허용)을 켜줍니다.
+        UBodySetup* BodySetup = DynamicMeshComponent->GetBodySetup();
+        if (BodySetup)
+        {
+            BodySetup->bGenerateMirroredCollision = true; 
+        }
+        
+        // 다이나믹 메시가 초기화된 직후에 실행되므로 안전하게 적용됩니다.
+        if (TestMaterial)
+        {
+            DynamicMeshComponent->SetMaterial(0, TestMaterial);
+        }
+
+        // 설정을 변경했으니 충돌을 업데이트합니다.
         DynamicMeshComponent->UpdateCollision(true);
     }
 }
