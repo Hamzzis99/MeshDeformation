@@ -6,6 +6,7 @@
 #include "DrawDebugHelpers.h"
 #include "TimerManager.h"
 #include "Kismet/GameplayStatics.h" 
+#include "Net/UnrealNetwork.h" 
 
 // 다이나믹 메시 관련 헤더
 #include "Components/DynamicMeshComponent.h"
@@ -22,6 +23,15 @@ UMDF_DeformableComponent::UMDF_DeformableComponent()
 {
     PrimaryComponentTick.bCanEverTick = false; 
     SetIsReplicatedByDefault(true); // [Step 7] 컴포넌트 복제 활성화
+}
+
+// [Step 8] 동기화 변수 등록 (히스토리 리스트)
+void UMDF_DeformableComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+    // HitHistory는 서버 -> 클라이언트로 복제됨 (Late Join 지원)
+    DOREPLIFETIME(UMDF_DeformableComponent, HitHistory);
 }
 
 void UMDF_DeformableComponent::BeginPlay()
@@ -102,8 +112,8 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     }
 }
 
-/** * [Step 7-2] 서버 로직 수정 
- * 직접 변형하지 않고, 모인 데이터를 RPC로 방송(Broadcast)합니다.
+/** * [Step 6 최적화 -> Step 8 업데이트] 
+ * 서버에서만 호출됨. 큐에 모인 데이터를 히스토리로 옮기고 이펙트 명령을 내림.
  */
 void UMDF_DeformableComponent::ProcessDeformationBatch()
 {
@@ -115,108 +125,136 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
 
     if (HitQueue.IsEmpty()) return;
 
-    // [Log: RPC 전송]
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] 클라이언트들에게 %d개의 변형 데이터를 브로드캐스팅합니다."), HitQueue.Num());
+    // [Step 8 변경점]
+    // 1. [상태 저장 - Track B] 서버 히스토리에 누적 -> 클라 자동 복제
+    HitHistory.Append(HitQueue);
 
-    // [핵심] RPC 호출: 서버가 "이 데이터로 변형해라"라고 모든 클라이언트(자신 포함)에게 명령
-    NetMulticast_ApplyDeformation(HitQueue);
+    // [Log: RPC 전송 로그 유지]
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] %d개의 변형 발생. 히스토리 저장 및 이펙트 RPC 전송."), HitQueue.Num());
+
+    // 2. [이펙트 방송 - Track A] "지금 당장 소리와 파티클을 재생해라" (모양변형 X)
+    NetMulticast_PlayEffects(HitQueue);
+
+    // 3. [서버 변형 적용] 
+    // 서버는 OnRep이 자동 호출되지 않으므로, 수동으로 호출하여 물리/충돌 상태를 업데이트합니다.
+    OnRep_HitHistory(); 
 
     // 전송 완료했으므로 서버의 대기열 비움
     HitQueue.Empty();
 }
 
-/** * [Step 7-3] 클라이언트 실행 로직 (RPC 구현부)
- * 서버와 클라이언트 모두 이 함수가 실행되어 실제 메쉬 변형과 이펙트가 발생합니다.
+/** * [Step 8 핵심: 상태 동기화] 
+ * - 히스토리 배열이 변할 때마다 호출됨 (서버는 수동호출, 클라는 자동호출)
+ * - "모양"만 바꿈 (소리 X)
+ * - 늦게 들어온 유저는 LastAppliedIndex가 0이므로 처음부터 끝까지 루프를 돌아 모양을 완성함.
  */
-void UMDF_DeformableComponent::NetMulticast_ApplyDeformation_Implementation(const TArray<FMDFHitData>& BatchedHits)
+void UMDF_DeformableComponent::OnRep_HitHistory()
 {
-    if (BatchedHits.IsEmpty()) return;
+    AActor* Owner = GetOwner();
+    if (!IsValid(Owner)) return;
+
+    UDynamicMeshComponent* MeshComp = Owner->FindComponentByClass<UDynamicMeshComponent>();
+    if (!IsValid(MeshComp) || !IsValid(MeshComp->GetDynamicMesh())) return;
+
+    // [최적화] 새로 추가된 데이터만 순회 (LastAppliedIndex 활용)
+    int32 CurrentNum = HitHistory.Num();
+    if (LastAppliedIndex >= CurrentNum) return; 
+
+    // [Log: 클라이언트/서버 동기화 로그]
+    FString NetRole = (Owner->GetLocalRole() == ROLE_Authority) ? TEXT("Server") : TEXT("Client");
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [%s Sync] 변형 데이터 동기화 시작 (인덱스: %d ~ %d)"), *NetRole, LastAppliedIndex, CurrentNum - 1);
+
+    const double RadiusSq = FMath::Square((double)DeformRadius);
+    const double InverseRadius = 1.0 / (double)DeformRadius;
+        
+    // --- [변형 알고리즘 - 기존 코드 유지] ---
+    MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
+    {
+        for (int32 VertexID : EditMesh.VertexIndicesItr())
+        {
+            FVector3d VertexPos = EditMesh.GetVertex(VertexID);
+            FVector3d TotalOffset(0.0, 0.0, 0.0);
+            bool bModified = false;
+
+            // [최적화 루프] 아직 적용 안 한 것부터 끝까지
+            for (int32 i = LastAppliedIndex; i < CurrentNum; ++i)
+            {
+                const FMDFHitData& Hit = HitHistory[i];
+
+                double DistSq = FVector3d::DistSquared(VertexPos, (FVector3d)Hit.LocalLocation);
+                
+                if (DistSq < RadiusSq)
+                {
+                    double Distance = FMath::Sqrt(DistSq);
+                    double Falloff = 1.0 - (Distance * InverseRadius);
+                    
+                    float DamageFactor = Hit.Damage * 0.05f; 
+                    float CurrentStrength = DeformStrength * DamageFactor;
+
+                    if (Hit.DamageTypeClass && MeleeDamageType && Hit.DamageTypeClass->IsChildOf(MeleeDamageType)) 
+                    {
+                        CurrentStrength *= 1.5f; 
+                    }
+                    else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
+                    {
+                        CurrentStrength *= 0.5f; 
+                    }
+
+                    TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
+                    bModified = true;
+                }
+            }
+            
+            if (bModified)
+            {
+                EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
+            }
+        }
+    }, EDynamicMeshChangeType::GeneralEdit);
+
+    // 인덱스 갱신 (처리 완료)
+    LastAppliedIndex = CurrentNum;
+
+    // --- [물리 및 렌더링 갱신] ---
+    UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
+    MeshComp->UpdateCollision();
+    MeshComp->NotifyMeshUpdated();
+}
+
+/** * [Step 8] 이펙트 전용 (소리/파티클)
+ * - 모양 변형 로직은 없음 (위 OnRep에서 처리됨).
+ */
+void UMDF_DeformableComponent::NetMulticast_PlayEffects_Implementation(const TArray<FMDFHitData>& NewHits)
+{
+    // Dedicated Server는 이펙트 재생 불필요
+    if (IsRunningDedicatedServer()) return;
 
     AActor* Owner = GetOwner();
     if (!IsValid(Owner)) return;
 
-    // [Log: 클라이언트/서버 적용 로그]
-    FString NetRole = (Owner->GetLocalRole() == ROLE_Authority) ? TEXT("Server") : TEXT("Client");
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [%s 적용] 변형 데이터 %d개 적용 시작"), *NetRole, BatchedHits.Num());
-
     UDynamicMeshComponent* MeshComp = Owner->FindComponentByClass<UDynamicMeshComponent>();
+    if (!IsValid(MeshComp)) return;
     
-    if (IsValid(MeshComp) && IsValid(MeshComp->GetDynamicMesh()))
+    const FTransform& ComponentTransform = MeshComp->GetComponentTransform();
+
+    // [Log: 이펙트 재생 로그]
+    // UE_LOG(LogTemp, Log, TEXT("[MDF] [Client] 이펙트(소리/나이아가라) 재생 - %d개"), NewHits.Num());
+
+    // --- [시각(Niagara) 및 청각(Sound) 효과 재생 - 기존 코드 유지] ---
+    for (const FMDFHitData& Hit : NewHits)
     {
-        const double RadiusSq = FMath::Square((double)DeformRadius);
-        const double InverseRadius = 1.0 / (double)DeformRadius;
-        
-        const FTransform& ComponentTransform = MeshComp->GetComponentTransform();
+        FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
+        FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
 
-        // --- [Part 1: 순수 메시 변형] ---
-        // 주의: BatchedHits(RPC로 받은 인자)를 사용해야 합니다.
-        MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
+        if (IsValid(DebrisSystem))
         {
-            for (int32 VertexID : EditMesh.VertexIndicesItr())
-            {
-                FVector3d VertexPos = EditMesh.GetVertex(VertexID);
-                FVector3d TotalOffset(0.0, 0.0, 0.0);
-                bool bModified = false;
-
-                for (const FMDFHitData& Hit : BatchedHits)
-                {
-                    double DistSq = FVector3d::DistSquared(VertexPos, (FVector3d)Hit.LocalLocation);
-                    
-                    if (DistSq < RadiusSq)
-                    {
-                        double Distance = FMath::Sqrt(DistSq);
-                        double Falloff = 1.0 - (Distance * InverseRadius);
-                        
-                        float DamageFactor = Hit.Damage * 0.05f; 
-                        float CurrentStrength = DeformStrength * DamageFactor;
-
-                        if (Hit.DamageTypeClass && MeleeDamageType && Hit.DamageTypeClass->IsChildOf(MeleeDamageType)) 
-                        {
-                            CurrentStrength *= 1.5f; 
-                        }
-                        else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
-                        {
-                            CurrentStrength *= 0.5f; 
-                        }
-
-                        TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
-                        bModified = true;
-                    }
-                }
-                
-                if (bModified)
-                {
-                    EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
-                }
-            }
-        }, EDynamicMeshChangeType::GeneralEdit);
-
-        // --- [Part 2: 시각(Niagara) 및 청각(Sound) 효과 재생] ---
-        // 이펙트는 로컬에서만 중요하므로, Dedicated Server(헤드리스)에서는 스킵하여 성능을 아낄 수 있습니다.
-        if (!IsRunningDedicatedServer()) 
-        {
-            for (const FMDFHitData& Hit : BatchedHits)
-            {
-                FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
-                FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
-
-                if (IsValid(DebrisSystem))
-                {
-                    UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
-                }
-
-                if (IsValid(ImpactSound))
-                {
-                    UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
-                }
-            }
+            UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
         }
 
-        // --- [Part 3: 물리 및 렌더링 갱신] ---
-        // 충돌 정보 갱신은 서버(물리 판정)와 클라이언트(IK/Trace 등) 모두 필요합니다.
-        UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
-        MeshComp->UpdateCollision();
-        MeshComp->NotifyMeshUpdated();
+        if (IsValid(ImpactSound))
+        {
+            UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
+        }
     }
 }
 

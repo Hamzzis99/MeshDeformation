@@ -44,6 +44,9 @@ class MESHDEFORMATION_API UMDF_DeformableComponent : public UActorComponent
 public: 
     UMDF_DeformableComponent();
 
+    // [Step 8] 리플리케이션(동기화) 설정을 위해 필수 오버라이드
+    virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 protected:
     virtual void BeginPlay() override;
 
@@ -56,15 +59,38 @@ protected:
      */
     void ProcessDeformationBatch();
 
+    // -------------------------------------------------------------------------
+    // [Step 8 핵심: 데이터 동기화 분리]
+    // -------------------------------------------------------------------------
+
+    /** * [1. 상태 동기화 (Track B)]
+     * 서버에 누적된 타격 히스토리. 늦게 들어온 유저에게 자동으로 전송됩니다.
+     * 값이 변경되거나 클라이언트가 처음 접속하면 OnRep_HitHistory가 실행됩니다.
+     */
+    UPROPERTY(ReplicatedUsing = OnRep_HitHistory)
+    TArray<FMDFHitData> HitHistory;
+
+    /** * 클라이언트에서 히스토리 데이터가 도착/변경되었을 때 호출됩니다.
+     * 여기서는 "모양 변형(Deformation)"만 수행하고 소리는 내지 않습니다.
+     */
+    UFUNCTION()
+    void OnRep_HitHistory();
+
     /**
-     * [Step 1 네트워크 추가]
+     * [Step 7 네트워크 추가]
      * 서버에서 배칭된 타격 데이터를 모든 클라이언트에게 전송하여 실행합니다.
      * Reliable: 지형 변형은 게임플레이(엄폐물 제거 등)에 영향을 주므로 패킷 유실을 허용하지 않습니다.
      * NetMulticast: 서버 -> 모든 클라이언트 (서버 자신 포함 가능, 구현부에 따라 처리)
-     * * @param BatchedHits - 서버에서 0.1초(BatchProcessDelay)간 모은 타격 데이터 배열
+     * BatchedHits - 서버에서 0.1초(BatchProcessDelay)간 모은 타격 데이터 배열
+    
+     * [Step 8 변경 - 2. 이펙트 동기화 (Track A)]
+     * 기존의 ApplyDeformation을 PlayEffects로 변경합니다.
+     * 타격을 당한 순간에만 실행되며, 오직 사운드와 나이아가라 이펙트만 담당합니다. (모양 변형 X)
+     * Reliable: 이펙트도 중요하므로 Reliable 유지
      */
+    
     UFUNCTION(NetMulticast, Reliable)
-    void NetMulticast_ApplyDeformation(const TArray<FMDFHitData>& BatchedHits);
+    void NetMulticast_PlayEffects(const TArray<FMDFHitData>& NewHits);
 
 public:
     /** 원본으로 사용할 StaticMesh 에셋 */
@@ -124,6 +150,9 @@ public:
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
     TArray<FMDFHitData> HitQueue;
+
+    /** [Step 8 최적화] 클라이언트가 어디까지 변형을 적용했는지 기억하는 인덱스 */
+    int32 LastAppliedIndex = 0;
 
     /** 타이머 핸들 (중복 호출 방지용) */
     FTimerHandle BatchTimerHandle;
