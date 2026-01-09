@@ -11,7 +11,6 @@
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "DynamicMesh/DynamicMesh3.h"
-// #include "DynamicMesh/DynamicMeshAttributeSet.h" // 머터리얼(색상) 제어용 헤더는 삭제함
 #include "GeometryScript/MeshAssetFunctions.h"
 #include "GeometryScript/MeshNormalsFunctions.h"
 
@@ -22,7 +21,7 @@
 UMDF_DeformableComponent::UMDF_DeformableComponent()
 {
     PrimaryComponentTick.bCanEverTick = false; 
-    SetIsReplicatedByDefault(true);
+    SetIsReplicatedByDefault(true); // [Step 7] 컴포넌트 복제 활성화
 }
 
 void UMDF_DeformableComponent::BeginPlay()
@@ -39,6 +38,7 @@ void UMDF_DeformableComponent::BeginPlay()
           Owner->SetReplicateMovement(true); 
        }
 
+       // 데미지 델리게이트 등록 (서버/클라 모두 등록하되 처리는 HandlePointDamage 내부에서 Authority 체크)
        Owner->OnTakePointDamage.RemoveDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
     }
@@ -46,12 +46,13 @@ void UMDF_DeformableComponent::BeginPlay()
 
 void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
 {
-    // 1. 기본 유효성 검사
-    if (!bIsDeformationEnabled || !IsValid(DamagedActor) || Damage <= 0.0f) return;
-    if (!DamagedActor->HasAuthority()) return;
+    // 1. [Server Only] 데미지 처리는 오직 서버 권한이 있는 경우에만 수행
+    if (!IsValid(GetOwner()) || !GetOwner()->HasAuthority()) return;
 
-    // --- [안전장치 & 디버깅 권한 검사] 시작 ---
-    // 공격자(Attacker) 식별: 컨트롤러가 있으면 Pawn을, 없으면 가해자 액터 자체를 사용
+    // 2. 기본 유효성 검사
+    if (!bIsDeformationEnabled || Damage <= 0.0f) return;
+
+    // --- [안전장치 & 디버깅 권한 검사] (기존 코드의 로직 복원) ---
     AActor* Attacker = DamageCauser;
     if (InstigatedBy && InstigatedBy->GetPawn())
     {
@@ -66,108 +67,118 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
         // 2. 테스트 권한이 있는 플레이어인가? (MDF_Test 태그 확인 - 디버깅용)
         bool bIsTester = Attacker->ActorHasTag(TEXT("MDF_Test"));
 
-        // 둘 다 아니라면(아군이거나 권한 없는 대상) 찌그러트리지 않고 무시함
-        if (!bIsEnemy && !bIsTester)
-        {
-            return; 
-        }
+        // 둘 다 아니라면 찌그러트리지 않고 무시함
+        if (!bIsEnemy && !bIsTester) return; 
     }
-    // --- [안전장치 & 디버깅 권한 검사] 끝 ---
+    // -----------------------------------------------------------
 
-
-    // 2. 실제 변형 로직 진행
-    // 디버그 로그: 어떤 데미지 타입이 들어왔는지 확인
+    // [Log: 데미지 수신 로그 복원]
     FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s / 공격자: %s"), Damage, *DmgTypeName, *GetNameSafe(Attacker));
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server 수신] 데미지 감지! 데미지: %.1f / 타입: %s / 공격자: %s"), Damage, *DmgTypeName, *GetNameSafe(Attacker));
 
+    // 3. 큐에 데이터 적재 (서버 메모리)
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
     {
-        MeshComp = DamagedActor->FindComponentByClass<UDynamicMeshComponent>();
+        MeshComp = GetOwner()->FindComponentByClass<UDynamicMeshComponent>();
     }
 
     if (IsValid(MeshComp))
     {
-        // 데미지 타입 클래스 정보를 함께 큐에 저장
-        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType->GetClass()));
+        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType ? DamageType->GetClass() : nullptr));
 
+        // 디버그 포인트 그리기 (서버 화면)
+        if (bShowDebugPoints)
+        {
+            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
+        }
+
+        // 타이머가 없으면 작동 (배칭 시작)
         if (!BatchTimerHandle.IsValid())
         {
             float Delay = FMath::Max(0.001f, BatchProcessDelay);
             GetWorld()->GetTimerManager().SetTimer(BatchTimerHandle, this, &UMDF_DeformableComponent::ProcessDeformationBatch, Delay, false);
         }
-
-        if (bShowDebugPoints)
-        {
-            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
-        }
     }
 }
 
-/** * [최적화된 배칭 처리 함수]
- * 1. 머터리얼(색상) 로직 삭제됨 -> 오직 물리적 변형(위치 이동)만 수행
- * 2. 데미지 타입에 따라 변형 강도(깊이) 조절
- * 3. 나이아가라 이펙트 및 사운드 재생 유지
+/** * [Step 7-2] 서버 로직 수정 
+ * 직접 변형하지 않고, 모인 데이터를 RPC로 방송(Broadcast)합니다.
  */
 void UMDF_DeformableComponent::ProcessDeformationBatch()
 {
+    // 타이머 핸들 초기화
     BatchTimerHandle.Invalidate();
+
+    // 서버인지 다시 한 번 확인 (안전장치)
+    if (!IsValid(GetOwner()) || !GetOwner()->HasAuthority()) return;
+
     if (HitQueue.IsEmpty()) return;
 
+    // [Log: RPC 전송]
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] 클라이언트들에게 %d개의 변형 데이터를 브로드캐스팅합니다."), HitQueue.Num());
+
+    // [핵심] RPC 호출: 서버가 "이 데이터로 변형해라"라고 모든 클라이언트(자신 포함)에게 명령
+    NetMulticast_ApplyDeformation(HitQueue);
+
+    // 전송 완료했으므로 서버의 대기열 비움
+    HitQueue.Empty();
+}
+
+/** * [Step 7-3] 클라이언트 실행 로직 (RPC 구현부)
+ * 서버와 클라이언트 모두 이 함수가 실행되어 실제 메쉬 변형과 이펙트가 발생합니다.
+ */
+void UMDF_DeformableComponent::NetMulticast_ApplyDeformation_Implementation(const TArray<FMDFHitData>& BatchedHits)
+{
+    if (BatchedHits.IsEmpty()) return;
+
     AActor* Owner = GetOwner();
+    if (!IsValid(Owner)) return;
+
+    // [Log: 클라이언트/서버 적용 로그]
+    FString NetRole = (Owner->GetLocalRole() == ROLE_Authority) ? TEXT("Server") : TEXT("Client");
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [%s 적용] 변형 데이터 %d개 적용 시작"), *NetRole, BatchedHits.Num());
+
     UDynamicMeshComponent* MeshComp = Owner->FindComponentByClass<UDynamicMeshComponent>();
     
     if (IsValid(MeshComp) && IsValid(MeshComp->GetDynamicMesh()))
     {
-        // [반지름 최적화] 매번 계산하지 않고 미리 제곱값과 역수를 구해둡니다.
         const double RadiusSq = FMath::Square((double)DeformRadius);
         const double InverseRadius = 1.0 / (double)DeformRadius;
         
         const FTransform& ComponentTransform = MeshComp->GetComponentTransform();
 
-        // --- [Part 1: 순수 메시 변형 (Deformation Only)] ---
+        // --- [Part 1: 순수 메시 변형] ---
+        // 주의: BatchedHits(RPC로 받은 인자)를 사용해야 합니다.
         MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
         {
-            // Vertex Color 관련 초기화 코드 삭제됨
-
             for (int32 VertexID : EditMesh.VertexIndicesItr())
             {
                 FVector3d VertexPos = EditMesh.GetVertex(VertexID);
                 FVector3d TotalOffset(0.0, 0.0, 0.0);
-                
                 bool bModified = false;
 
-                for (const FMDFHitData& Hit : HitQueue)
+                for (const FMDFHitData& Hit : BatchedHits)
                 {
                     double DistSq = FVector3d::DistSquared(VertexPos, (FVector3d)Hit.LocalLocation);
                     
-                    // 범위 안에 있는 버텍스만 계산
                     if (DistSq < RadiusSq)
                     {
-                        // 1. 거리 감쇄 (중앙은 1.0, 끝은 0.0)
                         double Distance = FMath::Sqrt(DistSq);
                         double Falloff = 1.0 - (Distance * InverseRadius);
                         
-                        // [핵심 변경] 데미지를 강도에 반영!
-                        // DeformStrength: 에디터 설정 기본값
-                        // Hit.Damage: 실제 총알 데미지
-                        // 0.05f: 데미지가 100일 때 너무 푹 꺼지지 않도록 조절하는 스케일 값 (취향껏 조절)
                         float DamageFactor = Hit.Damage * 0.05f; 
                         float CurrentStrength = DeformStrength * DamageFactor;
 
-                        // 데미지 타입별 추가 보정 (옵션)
                         if (Hit.DamageTypeClass && MeleeDamageType && Hit.DamageTypeClass->IsChildOf(MeleeDamageType)) 
                         {
-                            // 근접 공격은 둔탁하니까 1.5배 더 깊게
                             CurrentStrength *= 1.5f; 
                         }
-                        // 원거리 공격은 데미지가 낮으면 알아서 얕게 파임 (추가 보정 불필요 시 생략 가능)
                         else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
                         {
                             CurrentStrength *= 0.5f; 
                         }
 
-                        // 변형 적용 (방향 * 강도 * 거리감쇄)
                         TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
                         bModified = true;
                     }
@@ -175,40 +186,38 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
                 
                 if (bModified)
                 {
-                    // 위치만 업데이트 (색상 관련 함수 호출 삭제됨)
                     EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
                 }
             }
         }, EDynamicMeshChangeType::GeneralEdit);
 
         // --- [Part 2: 시각(Niagara) 및 청각(Sound) 효과 재생] ---
-        for (const FMDFHitData& Hit : HitQueue)
+        // 이펙트는 로컬에서만 중요하므로, Dedicated Server(헤드리스)에서는 스킵하여 성능을 아낄 수 있습니다.
+        if (!IsRunningDedicatedServer()) 
         {
-            FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
-            FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
-
-            // 나이아가라 파편 효과
-            if (IsValid(DebrisSystem))
+            for (const FMDFHitData& Hit : BatchedHits)
             {
-                UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
-            }
+                FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
+                FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
 
-            // 타격 사운드
-            if (IsValid(ImpactSound))
-            {
-                UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
+                if (IsValid(DebrisSystem))
+                {
+                    UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
+                }
+
+                if (IsValid(ImpactSound))
+                {
+                    UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
+                }
             }
         }
 
         // --- [Part 3: 물리 및 렌더링 갱신] ---
+        // 충돌 정보 갱신은 서버(물리 판정)와 클라이언트(IK/Trace 등) 모두 필요합니다.
         UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
         MeshComp->UpdateCollision();
         MeshComp->NotifyMeshUpdated();
-
-        UE_LOG(LogTemp, Warning, TEXT("[MDF] [최적화] %d개의 타격 처리 완료 (데미지 반영됨)."), HitQueue.Num());
     }
-
-    HitQueue.Empty();
 }
 
 void UMDF_DeformableComponent::InitializeDynamicMesh()
@@ -231,7 +240,7 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
         if (Outcome == EGeometryScriptOutcomePins::Success)
         {
             UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(MeshComp->GetDynamicMesh(), FGeometryScriptCalculateNormalsOptions());
-            MeshComp->UpdateCollision();
+            MeshComp->UpdateCollision(); // 초기화 시 충돌 업데이트
             MeshComp->NotifyMeshUpdated();
         }
     }

@@ -37,7 +37,7 @@ struct FMDFHitData
 };
 
 UCLASS(Blueprintable, ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
-class HELLUNA_API UMDF_DeformableComponent : public UActorComponent
+class MESHDEFORMATION_API UMDF_DeformableComponent : public UActorComponent
 {
     GENERATED_BODY()
 
