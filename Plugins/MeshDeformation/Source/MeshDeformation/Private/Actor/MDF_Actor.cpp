@@ -1,6 +1,7 @@
 ﻿// Gihyeon's Deformation Project (Helluna)
 
 #include "Actor/MDF_Actor.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "Components/DynamicMeshComponent.h"
 #include "Components/MDF_DeformableComponent.h"
 
@@ -22,6 +23,13 @@ AMDF_Actor::AMDF_Actor()
         // [해결책] ECollisionComplexity 심볼 에러를 피하기 위해 전용 함수를 사용합니다.
         // 이 함수는 내부적으로 ComplexAsSimple 설정을 안전하게 처리합니다.
         DynamicMeshComponent->SetComplexAsSimpleCollisionEnabled(true, true);
+        
+        // 음수여도 다이나믹 메시에게 괜찮다는 것을 알리는 것.
+        UBodySetup* BodySetup = DynamicMeshComponent->GetBodySetup();
+        if (BodySetup)
+        {
+            BodySetup->bGenerateMirroredCollision = true; 
+        }
         
         // 정적 구조물로서의 역할을 위해 물리 시뮬레이션(중력 등)은 끕니다.
         DynamicMeshComponent->SetSimulatePhysics(false);

@@ -49,9 +49,30 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     if (!bIsDeformationEnabled || !IsValid(DamagedActor) || Damage <= 0.0f) return;
     if (!DamagedActor->HasAuthority()) return;
 
-    // [디버깅 추가] 어떤 데미지 타입이 들어왔는지 컴포넌트 입장에서 로그 출력
-    FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s"), Damage, *DmgTypeName);
+    // [디버깅 로직 업그레이드] 
+    // 들어온 데미지 타입이 내가 설정한 원거리/근접 타입과 일치하는지 검사합니다.
+    FString TypeResult = TEXT("알 수 없음 (Unknown)");
+    UClass* IncomingTypeClass = IsValid(DamageType) ? DamageType->GetClass() : nullptr;
+
+    if (IncomingTypeClass)
+    {
+        // IsChildOf를 쓰면 상속받은 자식 클래스여도 다 알아봅니다 (더 안전함)
+        if (RangedDamageType && IncomingTypeClass->IsChildOf(RangedDamageType))
+        {
+            TypeResult = TEXT("원거리 공격 (Ranged)");
+        }
+        else if (MeleeDamageType && IncomingTypeClass->IsChildOf(MeleeDamageType))
+        {
+            TypeResult = TEXT("근접 공격 (Melee)");
+        }
+    }
+
+    // 업그레이드된 로그: 데미지 양, 들어온 클래스 이름, 그리고 판정 결과까지 출력
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지: %.1f / 클래스: %s / 판정결과: %s"), 
+        Damage, 
+        *GetNameSafe(IncomingTypeClass), 
+        *TypeResult
+    );
 
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
@@ -61,8 +82,7 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
 
     if (IsValid(MeshComp))
     {
-        // 데미지 타입을 함께 저장하여 나중에 어떤 색을 칠할지 결정함
-        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType->GetClass()));
+        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, IncomingTypeClass));
 
         if (!BatchTimerHandle.IsValid())
         {
@@ -70,9 +90,14 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
             GetWorld()->GetTimerManager().SetTimer(BatchTimerHandle, this, &UMDF_DeformableComponent::ProcessDeformationBatch, Delay, false);
         }
 
+        // 판정 결과에 따라 디버그 포인트 색상도 다르게! (원거리=빨강, 근접=초록, 기타=노랑)
         if (bShowDebugPoints)
         {
-            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
+            FColor DebugColor = FColor::Yellow;
+            if (TypeResult.Contains(TEXT("원거리"))) DebugColor = FColor::Red;
+            else if (TypeResult.Contains(TEXT("근접"))) DebugColor = FColor::Green;
+
+            DrawDebugPoint(GetWorld(), HitLocation, 10.0f, DebugColor, false, 3.0f);
         }
     }
 }
