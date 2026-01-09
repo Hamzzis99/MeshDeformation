@@ -1,6 +1,7 @@
 ﻿// Gihyeon's Deformation Project (Helluna)
 
 #include "Components/MDF_DeformableComponent.h"
+#include "SaveGame/MDF_SaveGame.h"
 #include "GameFramework/Actor.h"
 #include "Engine/Engine.h"
 #include "DrawDebugHelpers.h"
@@ -34,6 +35,26 @@ void UMDF_DeformableComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProper
     DOREPLIFETIME(UMDF_DeformableComponent, HitHistory);
 }
 
+// [Step 9-2] 에디터에서 컴포넌트가 처음 생성될 때 고유 ID 부여
+void UMDF_DeformableComponent::OnComponentCreated()
+{
+    Super::OnComponentCreated();
+    if (!ComponentGuid.IsValid())
+    {
+        ComponentGuid = FGuid::NewGuid();
+    }
+}
+
+// [Step 9-2] 에셋 로드 시 GUID 유효성 검사 (하위 호환성용)
+void UMDF_DeformableComponent::PostLoad()
+{
+    Super::PostLoad();
+    if (!ComponentGuid.IsValid())
+    {
+        ComponentGuid = FGuid::NewGuid();
+    }
+}
+
 void UMDF_DeformableComponent::BeginPlay()
 {
     Super::BeginPlay();
@@ -51,6 +72,13 @@ void UMDF_DeformableComponent::BeginPlay()
        // 데미지 델리게이트 등록 (서버/클라 모두 등록하되 처리는 HandlePointDamage 내부에서 Authority 체크)
        Owner->OnTakePointDamage.RemoveDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
+
+       // [Step 9-2] 서버라면 시작하자마자 현재 맵 이름으로 된 세이브 데이터 로드 시도
+       if (Owner->HasAuthority())
+       {
+           FString MapName = UGameplayStatics::GetCurrentLevelName(GetWorld());
+           LoadStateFromSlot(MapName);
+       }
     }
 }
 
@@ -255,6 +283,57 @@ void UMDF_DeformableComponent::NetMulticast_PlayEffects_Implementation(const TAr
         {
             UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
         }
+    }
+}
+
+// -------------------------------------------------------------------------
+// [Step 9-2 구현부: 저장 및 로드 로직]
+// -------------------------------------------------------------------------
+
+void UMDF_DeformableComponent::SaveStateToSlot(FString SlotName)
+{
+    // 1. 서버 권한 및 GUID 유효성 확인
+    if (!GetOwner() || !GetOwner()->HasAuthority() || !ComponentGuid.IsValid()) return;
+
+    // 2. 기존 파일 로드 시도, 없으면 새로 생성
+    UMDF_SaveGame* SaveInst = Cast<UMDF_SaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
+    if (!SaveInst)
+    {
+        SaveInst = Cast<UMDF_SaveGame>(UGameplayStatics::CreateSaveGameObject(UMDF_SaveGame::StaticClass()));
+    }
+
+    if (SaveInst)
+    {
+        // 3. 내 GUID에 현재 HitHistory 누적 데이터 저장
+        FMDFWallSaveData& Data = SaveInst->SavedWalls.FindOrAdd(ComponentGuid);
+        Data.HitHistory = HitHistory;
+
+        // 4. 디스크에 물리적 저장
+        if (UGameplayStatics::SaveGameToSlot(SaveInst, SlotName, 0))
+        {
+            UE_LOG(LogTemp, Log, TEXT("[MDF] [Save] ID: %s 상태 저장 성공! (총 %d건)"), *ComponentGuid.ToString(), HitHistory.Num());
+        }
+    }
+}
+
+void UMDF_DeformableComponent::LoadStateFromSlot(FString SlotName)
+{
+    // 1. 서버 권한 확인
+    if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+
+    // 2. 세이브 파일 존재 여부 확인 후 로드
+    if (!UGameplayStatics::DoesSaveGameExist(SlotName, 0)) return;
+
+    UMDF_SaveGame* SaveInst = Cast<UMDF_SaveGame>(UGameplayStatics::LoadGameFromSlot(SlotName, 0));
+    if (SaveInst && SaveInst->SavedWalls.Contains(ComponentGuid))
+    {
+        // 3. 데이터 복구
+        HitHistory = SaveInst->SavedWalls[ComponentGuid].HitHistory;
+
+        // 4. 서버는 OnRep이 자동으로 불리지 않으므로 수동 호출하여 물리/메시 상태 업데이트
+        OnRep_HitHistory(); 
+
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [Load] ID: %s 데이터 복구 완료!"), *ComponentGuid.ToString());
     }
 }
 

@@ -47,6 +47,10 @@ public:
     // [Step 8] 리플리케이션(동기화) 설정을 위해 필수 오버라이드
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+    /** [Step 9-2] 컴포넌트 생성 시 GUID 자동 생성 및 로드 보장 */
+    virtual void OnComponentCreated() override;
+    virtual void PostLoad() override;
+
 protected:
     virtual void BeginPlay() override;
 
@@ -146,6 +150,22 @@ public:
     /** [MeshDeformation|설정] 근접 공격 판정용 클래스 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
     TSubclassOf<UDamageType> MeleeDamageType;
+
+    // -------------------------------------------------------------------------
+    // [Step 9-2: 저장 시스템 전용]
+    // -------------------------------------------------------------------------
+    
+    /** 이 벽을 식별하는 고유 ID (에디터에서 생성되어 저장됨) */
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MeshDeformation|저장", meta = (DisplayName = "컴포넌트 고유 ID(GUID)"))
+    FGuid ComponentGuid;
+
+    /** 현재 상태를 특정 슬롯에 저장 (서버 전용) */
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|저장", meta = (DisplayName = "상태 저장(SaveState)"))
+    void SaveStateToSlot(FString SlotName);
+
+    /** 특정 슬롯에서 데이터를 불러와 복구 (서버 전용) */
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|저장", meta = (DisplayName = "상태 로드(LoadState)"))
+    void LoadStateFromSlot(FString SlotName);
     
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
