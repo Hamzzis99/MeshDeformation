@@ -46,12 +46,39 @@ void UMDF_DeformableComponent::BeginPlay()
 
 void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
 {
+    // 1. 기본 유효성 검사
     if (!bIsDeformationEnabled || !IsValid(DamagedActor) || Damage <= 0.0f) return;
     if (!DamagedActor->HasAuthority()) return;
 
+    // --- [안전장치 & 디버깅 권한 검사] 시작 ---
+    // 공격자(Attacker) 식별: 컨트롤러가 있으면 Pawn을, 없으면 가해자 액터 자체를 사용
+    AActor* Attacker = DamageCauser;
+    if (InstigatedBy && InstigatedBy->GetPawn())
+    {
+        Attacker = InstigatedBy->GetPawn();
+    }
+
+    if (IsValid(Attacker))
+    {
+        // 1. 적군인가? (Enemy 태그 확인 - AI용)
+        bool bIsEnemy = Attacker->ActorHasTag(TEXT("Enemy"));
+        
+        // 2. 테스트 권한이 있는 플레이어인가? (MDF_Test 태그 확인 - 디버깅용)
+        bool bIsTester = Attacker->ActorHasTag(TEXT("MDF_Test"));
+
+        // 둘 다 아니라면(아군이거나 권한 없는 대상) 찌그러트리지 않고 무시함
+        if (!bIsEnemy && !bIsTester)
+        {
+            return; 
+        }
+    }
+    // --- [안전장치 & 디버깅 권한 검사] 끝 ---
+
+
+    // 2. 실제 변형 로직 진행
     // 디버그 로그: 어떤 데미지 타입이 들어왔는지 확인
     FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s"), Damage, *DmgTypeName);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s / 공격자: %s"), Damage, *DmgTypeName, *GetNameSafe(Attacker));
 
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
@@ -101,6 +128,8 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
         // --- [Part 1: 순수 메시 변형 (Deformation Only)] ---
         MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
         {
+            // Vertex Color 관련 초기화 코드 삭제됨
+
             for (int32 VertexID : EditMesh.VertexIndicesItr())
             {
                 FVector3d VertexPos = EditMesh.GetVertex(VertexID);
@@ -132,6 +161,11 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
                             // 근접 공격은 둔탁하니까 1.5배 더 깊게
                             CurrentStrength *= 1.5f; 
                         }
+                        // 원거리 공격은 데미지가 낮으면 알아서 얕게 파임 (추가 보정 불필요 시 생략 가능)
+                        else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
+                        {
+                            CurrentStrength *= 0.5f; 
+                        }
 
                         // 변형 적용 (방향 * 강도 * 거리감쇄)
                         TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
@@ -141,6 +175,7 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
                 
                 if (bModified)
                 {
+                    // 위치만 업데이트 (색상 관련 함수 호출 삭제됨)
                     EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
                 }
             }
@@ -152,11 +187,13 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
             FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
             FVector WorldHitDir = ComponentTransform.TransformVector(Hit.LocalDirection);
 
+            // 나이아가라 파편 효과
             if (IsValid(DebrisSystem))
             {
                 UNiagaraFunctionLibrary::SpawnSystemAtLocation(GetWorld(), DebrisSystem, WorldHitLoc, WorldHitDir.Rotation());
             }
 
+            // 타격 사운드
             if (IsValid(ImpactSound))
             {
                 UGameplayStatics::PlaySoundAtLocation(GetWorld(), ImpactSound, WorldHitLoc, FRotator::ZeroRotator, 1.0f, 1.0f, 0.0f, ImpactAttenuation);
