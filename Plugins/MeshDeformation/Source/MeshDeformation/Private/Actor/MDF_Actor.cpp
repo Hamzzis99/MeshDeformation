@@ -7,7 +7,7 @@
 AMDF_Actor::AMDF_Actor()
 {
     PrimaryActorTick.bCanEverTick = false;
-
+    
     // 1. 다이나믹 메시 컴포넌트 생성 및 루트 설정
     DynamicMeshComponent = CreateDefaultSubobject<UDynamicMeshComponent>(TEXT("다이나믹메시컴포넌트 (DynamicMeshComponent)"));
     SetRootComponent(DynamicMeshComponent);

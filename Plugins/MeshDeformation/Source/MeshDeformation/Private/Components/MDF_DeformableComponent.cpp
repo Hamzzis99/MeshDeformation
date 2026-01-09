@@ -49,6 +49,10 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     if (!bIsDeformationEnabled || !IsValid(DamagedActor) || Damage <= 0.0f) return;
     if (!DamagedActor->HasAuthority()) return;
 
+    // [디버깅 추가] 어떤 데미지 타입이 들어왔는지 컴포넌트 입장에서 로그 출력
+    FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [수신] 데미지 감지! 데미지: %.1f / 타입: %s"), Damage, *DmgTypeName);
+
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
     {
