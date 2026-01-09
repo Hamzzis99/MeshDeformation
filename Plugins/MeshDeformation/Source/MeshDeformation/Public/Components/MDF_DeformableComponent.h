@@ -10,9 +10,7 @@ class UDynamicMeshComponent;
 class UNiagaraSystem;
 class USoundBase;
 
-/** * [Step 6 최적화] 타격 데이터를 임시 저장하기 위한 구조체 
- * 루프 횟수를 줄이기 위해 여러 타격 지점을 이 구조체에 담아 한 번에 처리합니다.
- */
+/** * [Step 6 최적화] 타격 데이터를 임시 저장하기 위한 구조체 */
 USTRUCT(BlueprintType)
 struct FMDFHitData
 {
@@ -27,7 +25,6 @@ struct FMDFHitData
     UPROPERTY()
     float Damage;
 
-    // 추가: 어떤 종류의 데미지인지 저장
     UPROPERTY()
     TSubclassOf<UDamageType> DamageTypeClass;
 
@@ -53,9 +50,6 @@ protected:
 
     /** [Step 6 최적화] 모인 타격 지점들을 한 프레임의 끝에서 한 번에 연산 */
     void ProcessDeformationBatch();
-
-    /** [MeshDeformation] 실제 버텍스 변형 연산 (배칭 로직 내부에서 호출됨) */
-    void DeformMesh(UDynamicMeshComponent* MeshComp, const FVector& LocalLocation, const FVector& LocalDirection, float Damage);
 
 public:
     /** 원본으로 사용할 StaticMesh 에셋 */
@@ -88,9 +82,7 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|디버그", meta = (DisplayName = "디버그 포인트 표시"))
     bool bShowDebugPoints = true;
 
-    /** [Step 6 최적화] 타격 데이터를 모으는 시간 (초) 
-     * 0이면 다음 프레임에 즉시 처리, 10이면 10초 동안 모았다가 한 번에 처리합니다. 
-     */
+    /** [Step 6 최적화] 타격 데이터를 모으는 시간 (초) */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "배칭 처리 대기 시간"))
     float BatchProcessDelay = 0.0f;
     
@@ -102,15 +94,15 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "피격 사운드(3D)"))
     TObjectPtr<USoundBase> ImpactSound;
     
-    /** [MeshDeformation|Effect] 3D 사운드 거리 감쇄 설정 (여기서 거리에 따른 소리 크기 제어) */
+    /** [MeshDeformation|Effect] 3D 사운드 거리 감쇄 설정 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "사운드 감쇄 설정(3D Attenuation)"))
     TObjectPtr<USoundAttenuation> ImpactAttenuation;
     
-    /** [MeshDeformation|설정] 원거리 공격 판정용 클래스 (예: BP_DamageType_Ranged) */
+    /** [MeshDeformation|설정] 원거리 공격 판정용 클래스 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
     TSubclassOf<UDamageType> RangedDamageType;
 
-    /** [MeshDeformation|설정] 근접 공격 판정용 클래스 (예: BP_DamageType_Melee) */
+    /** [MeshDeformation|설정] 근접 공격 판정용 클래스 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
     TSubclassOf<UDamageType> MeleeDamageType;
     
