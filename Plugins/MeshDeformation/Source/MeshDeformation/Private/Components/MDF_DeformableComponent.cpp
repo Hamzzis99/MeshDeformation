@@ -39,6 +39,9 @@ void UMDF_DeformableComponent::BeginPlay()
     Super::BeginPlay();
     InitializeDynamicMesh();
     
+    //메시 초기화 이후 이미 적용했다는 것을 착각하기 위한 안전 장치 (리슨 서버 전용 방식)
+    LastAppliedIndex = 0;
+    
     AActor* Owner = GetOwner();
     if (IsValid(Owner))
     {
