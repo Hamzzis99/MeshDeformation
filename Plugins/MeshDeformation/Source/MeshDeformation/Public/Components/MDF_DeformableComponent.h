@@ -47,10 +47,6 @@ public:
     // [Step 8] 리플리케이션(동기화) 설정을 위해 필수 오버라이드
     virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-    /** [Step 9-2] 컴포넌트 생성 시 GUID 자동 생성 및 로드 보장 */
-    virtual void OnComponentCreated() override;
-    virtual void PostLoad() override;
-
 protected:
     virtual void BeginPlay() override;
 
@@ -81,19 +77,12 @@ protected:
     void OnRep_HitHistory();
 
     /**
-     * [Step 7 네트워크 추가]
-     * 서버에서 배칭된 타격 데이터를 모든 클라이언트에게 전송하여 실행합니다.
-     * Reliable: 지형 변형은 게임플레이(엄폐물 제거 등)에 영향을 주므로 패킷 유실을 허용하지 않습니다.
-     * NetMulticast: 서버 -> 모든 클라이언트 (서버 자신 포함 가능, 구현부에 따라 처리)
-     * BatchedHits - 서버에서 0.1초(BatchProcessDelay)간 모은 타격 데이터 배열
-    
      * [Step 8 변경 - 2. 이펙트 동기화 (Track A)]
      * 기존의 ApplyDeformation을 PlayEffects로 변경합니다.
-     * 타격을 당한 순간에만 실행되며, 오직 사운드와 나이아가라 이펙트만 담당합니다. (모양 변형 X)
-     * Reliable: 이펙트도 중요하므로 Reliable 유지
+     * 총을 쏘는 그 순간에만 실행되며, 오직 사운드와 나이아가라 이펙트만 담당합니다. (모양 변형 X)
+     * [최적화] Reliable -> Unreliable 변경 (기관총 연사 시 네트워크 부하 방지)
      */
-    
-    UFUNCTION(NetMulticast, Reliable)
+    UFUNCTION(NetMulticast, Unreliable)
     void NetMulticast_PlayEffects(const TArray<FMDFHitData>& NewHits);
 
 public:
@@ -152,20 +141,12 @@ public:
     TSubclassOf<UDamageType> MeleeDamageType;
 
     // -------------------------------------------------------------------------
-    // [Step 9-2: 저장 시스템 전용]
+    // [Step 10: 수리 시스템]
     // -------------------------------------------------------------------------
-    
-    /** 이 벽을 식별하는 고유 ID (에디터에서 생성되어 저장됨) */
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MeshDeformation|저장", meta = (DisplayName = "컴포넌트 고유 ID(GUID)"))
-    FGuid ComponentGuid;
 
-    /** 현재 상태를 특정 슬롯에 저장 (서버 전용) */
-    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|저장", meta = (DisplayName = "상태 저장(SaveState)"))
-    void SaveStateToSlot(FString SlotName);
-
-    /** 특정 슬롯에서 데이터를 불러와 복구 (서버 전용) */
-    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|저장", meta = (DisplayName = "상태 로드(LoadState)"))
-    void LoadStateFromSlot(FString SlotName);
+    /** [Step 10] 메쉬를 원상복구(수리)하고 히스토리를 초기화합니다. (서버 전용) */ 
+    UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수리", meta = (DisplayName = "메시 수리(RepairMesh)"))
+    void RepairMesh();
     
 private:
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */

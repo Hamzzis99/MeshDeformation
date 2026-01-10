@@ -6,7 +6,7 @@
 #include "DrawDebugHelpers.h"
 #include "TimerManager.h"
 #include "Kismet/GameplayStatics.h" 
-#include "Net/UnrealNetwork.h" 
+#include "Net/UnrealNetwork.h" // [Step 8] 리플리케이션 필수 헤더
 
 // 다이나믹 메시 관련 헤더
 #include "Components/DynamicMeshComponent.h"
@@ -25,7 +25,7 @@ UMDF_DeformableComponent::UMDF_DeformableComponent()
     SetIsReplicatedByDefault(true); // [Step 7] 컴포넌트 복제 활성화
 }
 
-// [Step 8] 동기화 변수 등록 (히스토리 리스트)
+// [Step 8] 동기화 변수 등록
 void UMDF_DeformableComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
     Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -48,7 +48,8 @@ void UMDF_DeformableComponent::BeginPlay()
           Owner->SetReplicateMovement(true); 
        }
 
-       // 데미지 델리게이트 등록 (서버/클라 모두 등록하되 처리는 HandlePointDamage 내부에서 Authority 체크)
+       // 데미지 델리게이트는 서버에서만 반응하면 되지만, 
+       // 안전을 위해 등록해두고 HandlePointDamage 내부에서 Authority 체크를 합니다.
        Owner->OnTakePointDamage.RemoveDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
     }
@@ -62,7 +63,7 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     // 2. 기본 유효성 검사
     if (!bIsDeformationEnabled || Damage <= 0.0f) return;
 
-    // --- [안전장치 & 디버깅 권한 검사] (기존 코드의 로직 복원) ---
+    // --- [안전장치 & 디버깅 권한 검사] ---
     AActor* Attacker = DamageCauser;
     if (InstigatedBy && InstigatedBy->GetPawn())
     {
@@ -80,9 +81,9 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
         // 둘 다 아니라면 찌그러트리지 않고 무시함
         if (!bIsEnemy && !bIsTester) return; 
     }
-    // -----------------------------------------------------------
+    // ----------------------------------------
 
-    // [Log: 데미지 수신 로그 복원]
+    // [Log: 데미지 수신 로그]
     FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
     UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server 수신] 데미지 감지! 데미지: %.1f / 타입: %s / 공격자: %s"), Damage, *DmgTypeName, *GetNameSafe(Attacker));
 
@@ -97,7 +98,7 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
     {
         HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType ? DamageType->GetClass() : nullptr));
 
-        // 디버그 포인트 그리기 (서버 화면)
+        // 디버그 포인트 표시 (서버)
         if (bShowDebugPoints)
         {
             DrawDebugPoint(GetWorld(), HitLocation, 10.0f, FColor::Red, false, 3.0f);
@@ -130,7 +131,7 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
     HitHistory.Append(HitQueue);
 
     // [Log: RPC 전송 로그 유지]
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] %d개의 변형 발생. 히스토리 저장 및 이펙트 RPC 전송."), HitQueue.Num());
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] %d개의 변형 발생. RPC 발송."), HitQueue.Num());
 
     // 2. [이펙트 방송 - Track A] "지금 당장 소리와 파티클을 재생해라" (모양변형 X)
     NetMulticast_PlayEffects(HitQueue);
@@ -156,9 +157,22 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
     UDynamicMeshComponent* MeshComp = Owner->FindComponentByClass<UDynamicMeshComponent>();
     if (!IsValid(MeshComp) || !IsValid(MeshComp->GetDynamicMesh())) return;
 
-    // [최적화] 새로 추가된 데이터만 순회 (LastAppliedIndex 활용)
     int32 CurrentNum = HitHistory.Num();
-    if (LastAppliedIndex >= CurrentNum) return; 
+
+    // -------------------------------------------------------------------------
+    // [Step 10 핵심] 수리 감지 로직
+    // 서버에서 배열이 비워지면(Reset), 내 인덱스보다 개수가 작아짐 -> 이때 초기화 수행
+    // -------------------------------------------------------------------------
+    if (CurrentNum < LastAppliedIndex)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [Sync] 수리 명령(Reset) 감지! 메쉬를 원상복구합니다."));
+        LastAppliedIndex = 0;
+        InitializeDynamicMesh(); // 물리적 모양 복구
+        return;
+    }
+
+    // [최적화] 이미 다 적용했으면 종료
+    if (LastAppliedIndex == CurrentNum) return; 
 
     // [Log: 클라이언트/서버 동기화 로그]
     FString NetRole = (Owner->GetLocalRole() == ROLE_Authority) ? TEXT("Server") : TEXT("Client");
@@ -167,7 +181,7 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
     const double RadiusSq = FMath::Square((double)DeformRadius);
     const double InverseRadius = 1.0 / (double)DeformRadius;
         
-    // --- [변형 알고리즘 - 기존 코드 유지] ---
+    // --- [변형 알고리즘] ---
     MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
     {
         for (int32 VertexID : EditMesh.VertexIndicesItr())
@@ -237,10 +251,7 @@ void UMDF_DeformableComponent::NetMulticast_PlayEffects_Implementation(const TAr
     
     const FTransform& ComponentTransform = MeshComp->GetComponentTransform();
 
-    // [Log: 이펙트 재생 로그]
-    // UE_LOG(LogTemp, Log, TEXT("[MDF] [Client] 이펙트(소리/나이아가라) 재생 - %d개"), NewHits.Num());
-
-    // --- [시각(Niagara) 및 청각(Sound) 효과 재생 - 기존 코드 유지] ---
+    // --- [시각(Niagara) 및 청각(Sound) 효과 재생] ---
     for (const FMDFHitData& Hit : NewHits)
     {
         FVector WorldHitLoc = ComponentTransform.TransformPosition(Hit.LocalLocation);
@@ -292,4 +303,24 @@ FVector UMDF_DeformableComponent::ConvertWorldToLocal(FVector WorldLocation)
 FVector UMDF_DeformableComponent::ConvertWorldDirectionToLocal(FVector WorldDirection)
 {
     return IsValid(GetOwner()) ? GetOwner()->GetActorTransform().InverseTransformVector(WorldDirection) : WorldDirection;
+}
+
+// -------------------------------------------------------------------------
+// [Step 10: 수리 기능 구현]
+// -------------------------------------------------------------------------
+
+void UMDF_DeformableComponent::RepairMesh()
+{
+    // 1. 서버만 실행 가능
+    if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+
+    // 2. 데이터 초기화
+    HitHistory.Empty();
+    LastAppliedIndex = 0;
+
+    // 3. 서버 쪽 모양 즉시 복구 (원본 스태틱 메시로 덮어쓰기)
+    InitializeDynamicMesh();
+
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server] 수리 완료! (히스토리 초기화됨)"));
+    // 4. 클라이언트는 HitHistory가 비워진 것을 감지하고(OnRep) 스스로 초기화함
 }
