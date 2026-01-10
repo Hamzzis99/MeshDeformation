@@ -76,6 +76,13 @@ protected:
     UFUNCTION()
     void OnRep_HitHistory();
 
+    // [New] 데이터 로드 재시도 함수
+    void TryLoadDataFromGameState();
+
+    // [New] 재시도용 타이머 및 카운터
+    FTimerHandle LoadRetryTimerHandle;
+    int32 LoadRetryCount = 0;
+    
     /**
      * [Step 8 변경 - 2. 이펙트 동기화 (Track A)]
      * 기존의 ApplyDeformation을 PlayEffects로 변경합니다.
@@ -84,7 +91,15 @@ protected:
      */
     UFUNCTION(NetMulticast, Unreliable)
     void NetMulticast_PlayEffects(const TArray<FMDFHitData>& NewHits);
+    
+    // 최대 체력 (기본값 1000)
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Health", meta = (DisplayName = "최대 체력"))
+    float MaxHP = 1000.0f;
 
+    // 현재 체력 (리플리케이션됨)
+    UPROPERTY(Replicated, VisibleAnywhere, BlueprintReadOnly, Category = "MDF|Health", meta = (DisplayName = "현재 체력"))
+    float CurrentHP;
+    
 public:
     /** 원본으로 사용할 StaticMesh 에셋 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "스태틱 메쉬(StaticMesh)"))

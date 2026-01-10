@@ -23,8 +23,8 @@ class MESHDEFORMATION_API IMDF_GameStateInterface
 
 public:
 	// 1. 데이터를 저장해달라고 요청하는 함수
-	virtual void SaveMDFData(const FGuid& ID, const TArray<FMDFHitData>& Data) = 0;
+	virtual void SaveMDFData(const FGuid& ID, const TArray<FMDFHitData>& HitHistory, float CurrentHP) = 0;
 
 	// 2. 데이터를 불러달라고 요청하는 함수
-	virtual bool LoadMDFData(const FGuid& ID, TArray<FMDFHitData>& OutData) = 0;
+	virtual bool LoadMDFData(const FGuid& ID, TArray<FMDFHitData>& OutHistory, float& OutHP) = 0;
 };

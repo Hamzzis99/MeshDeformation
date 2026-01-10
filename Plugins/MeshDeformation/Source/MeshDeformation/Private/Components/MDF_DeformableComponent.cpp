@@ -36,6 +36,9 @@ void UMDF_DeformableComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProper
     
     // 변형 히스토리 복제
     DOREPLIFETIME(UMDF_DeformableComponent, HitHistory);
+
+    // [New] 현재 체력 복제
+    DOREPLIFETIME(UMDF_DeformableComponent, CurrentHP);
 }
 
 void UMDF_DeformableComponent::BeginPlay()
@@ -47,60 +50,38 @@ void UMDF_DeformableComponent::BeginPlay()
     
     // 리셋 안전 장치
     LastAppliedIndex = 0;
+    LoadRetryCount = 0; // 재시도 카운트 초기화
     
+    // [New] 시작 시 체력을 최대치로 설정 (로드 데이터가 있으면 덮어씌워짐)
+    CurrentHP = MaxHP;
+
     AActor* Owner = GetOwner();
 
     // -------------------------------------------------------------------------
-    // [Step 9: 인터페이스를 통한 데이터 복구 (Load)]
-    // 월드 파티션 언로드/로드 시 GameState에서 기존 파괴 상태를 복구합니다.
+    // [Step 9] 액터 이름 기반 데이터 복구 (Load)
     // -------------------------------------------------------------------------
     if (IsValid(Owner) && Owner->HasAuthority())
     {
-        // 1. GUID가 없으면 이름 기반으로 생성 (안전장치)
+        // 1. GUID가 없다면, '액터 이름'을 해싱하여 고정 ID 생성
+        //    (예: "BP_TestActor_1" -> 항상 동일한 GUID 생성)
         if (!ComponentGuid.IsValid())
         {
-            FString UniqueName = Owner->GetName();
-            FGuid::Parse(UniqueName, ComponentGuid);
-            if (!ComponentGuid.IsValid()) ComponentGuid = FGuid::NewGuid();
+            FString MyName = Owner->GetName();
+            
+            // 언리얼 내장 문자열 해시 함수 사용
+            uint32 NameHash = GetTypeHash(MyName);
+            
+            // 해시값으로 GUID 채우기 (이름이 같으면 ID도 항상 같음)
+            ComponentGuid = FGuid(NameHash, NameHash, NameHash, NameHash);
         }
 
-        // [DEBUG] 액터 생성 및 식별자 확인 (맵 이동 후 ID 유지 여부 확인용)
-        UE_LOG(LogTemp, Log, TEXT("[MDF] [BeginPlay] Actor Initialized - Name: %s / GUID: %s"), 
+        // [DEBUG] 식별자 확인 로그
+        UE_LOG(LogTemp, Log, TEXT("[MDF] [BeginPlay] Actor: %s -> Auto-Generated GUID: %s"), 
             *Owner->GetName(), *ComponentGuid.ToString());
 
-        // 2. 현재 월드의 GameState 가져오기
-        AGameStateBase* GS = UGameplayStatics::GetGameState(this);
-
-        // 3. 인터페이스(약속)를 지키는 GameState인지 확인 후 데이터 로드
-        IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
-        
-        if (MDF_GS)
-        {
-            TArray<FMDFHitData> SavedData;
-            
-            // [DEBUG] 로드 요청 시작 로그
-            UE_LOG(LogTemp, Log, TEXT("[MDF] [Load Request] GameState에 데이터 요청 중... (GUID: %s)"), *ComponentGuid.ToString());
-
-            // "제 ID(ComponentGuid)로 된 데이터가 있다면 주세요"
-            if (MDF_GS->LoadMDFData(ComponentGuid, SavedData))
-            {
-                HitHistory = SavedData;
-                
-                // [DEBUG] 로드 성공 로그
-                UE_LOG(LogTemp, Warning, TEXT("[MDF] [Load Success] 데이터 복원 성공! (Count: %d) - Actor: %s"), 
-                    HitHistory.Num(), *Owner->GetName());
-            }
-            else
-            {
-                // [DEBUG] 데이터 없음 로그 (신규 생성 혹은 저장 안됨)
-                UE_LOG(LogTemp, Log, TEXT("[MDF] [Load Result] 저장된 데이터 없음 (신규 액터이거나 기록 없음)."));
-            }
-        }
-        else
-        {
-            // [DEBUG] 인터페이스 캐스팅 실패
-            UE_LOG(LogTemp, Error, TEXT("[MDF] [Error] 현재 GameState가 IMDF_GameStateInterface를 상속받지 않았습니다!"));
-        }
+        // 2. GameState 접근 및 로드 (재시도 로직이 포함된 함수 호출)
+        //    GameState 로딩 속도 차이(Race Condition)를 극복하기 위해 별도 함수로 분리함
+        TryLoadDataFromGameState();
     }
     // -------------------------------------------------------------------------
 
@@ -122,6 +103,62 @@ void UMDF_DeformableComponent::BeginPlay()
     if (HitHistory.Num() > 0)
     {
         OnRep_HitHistory(); 
+    }
+}
+
+// [New Function] GameState가 준비될 때까지 기다렸다가 로드하는 함수
+void UMDF_DeformableComponent::TryLoadDataFromGameState()
+{
+    AGameStateBase* GS = UGameplayStatics::GetGameState(this);
+    IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
+
+    // 1. GameState 자체가 아직 없거나 인터페이스 준비가 안 됐다면 -> 짧게 대기 후 재시도
+    if (!MDF_GS)
+    {
+        if (LoadRetryCount < 10) // 최대 2초 (0.2 * 10) 대기
+        {
+            LoadRetryCount++;
+            GetWorld()->GetTimerManager().SetTimer(LoadRetryTimerHandle, this, &UMDF_DeformableComponent::TryLoadDataFromGameState, 0.2f, false);
+        }
+        return;
+    }
+
+    TArray<FMDFHitData> SavedData;
+    float LoadedHP = MaxHP; // [New] 불러올 체력 임시 변수
+    
+    // 2. 데이터 로드 시도 (파라미터: ID, OutHistory, OutHP)
+    // [DEBUG] 로드 요청 로그
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [Load Attempt] 데이터 요청 중... (GUID: %s, Retry: %d)"), *ComponentGuid.ToString(), LoadRetryCount);
+
+    if (MDF_GS->LoadMDFData(ComponentGuid, SavedData, LoadedHP))
+    {
+        // 성공! 데이터 적용
+        HitHistory = SavedData;
+        CurrentHP = LoadedHP; // [New] 저장된 체력 적용
+        
+        // [DEBUG] 로드 성공 로그
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [Load Success] %s 데이터 복원 완료! (Hit: %d, HP: %.1f)"), 
+            *GetOwner()->GetName(), HitHistory.Num(), CurrentHP);
+            
+        // 즉시 메쉬 변형 적용
+        OnRep_HitHistory();
+    }
+    else
+    {
+        // 3. 실패: GameState는 있지만 파일 로딩이 덜 끝났을 수 있음 -> 조금 길게 대기 후 재시도
+        if (LoadRetryCount < 5) // 추가로 5번 더 시도 (약 2.5초)
+        {
+            LoadRetryCount++;
+            // [DEBUG] 대기 로그
+            UE_LOG(LogTemp, Log, TEXT("[MDF] [Load Pending] 데이터 없음. GameState 로딩 대기 중... (Retry: %d/5)"), LoadRetryCount);
+            
+            GetWorld()->GetTimerManager().SetTimer(LoadRetryTimerHandle, this, &UMDF_DeformableComponent::TryLoadDataFromGameState, 0.5f, false);
+        }
+        else
+        {
+            // [DEBUG] 최종 실패 로그 (정말 신규 액터임)
+            UE_LOG(LogTemp, Log, TEXT("[MDF] [Load Final] 최종 결과: 저장된 데이터 없음 (신규 액터)."));
+        }
     }
 }
 
@@ -147,10 +184,17 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
         if (!bIsEnemy && !bIsTester) return; 
     }
 
-    // [Log: 데미지 수신 확인]
-    FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Damage In] 데미지 감지! Amount: %.1f / Type: %s / Attacker: %s"), 
-        Damage, *DmgTypeName, *GetNameSafe(Attacker));
+    // [New] 체력 감소 로직
+    CurrentHP = FMath::Clamp(CurrentHP - Damage, 0.0f, MaxHP);
+
+    // [DEBUG] 요청하신 로그 출력
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] 타격! 데미지: %.1f / 남은 체력: %.1f"), Damage, CurrentHP);
+
+    if (CurrentHP <= 0.0f)
+    {
+        // [To Do] 여기서 파괴 처리(Destroy) 등을 할 수 있음 (현재는 로그만 출력)
+        UE_LOG(LogTemp, Error, TEXT("[MDF] 구조물이 파괴되었습니다!"));
+    }
 
     // 다이나믹 메쉬 컴포넌트 찾기
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
@@ -195,11 +239,12 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
     HitHistory.Append(HitQueue);
 
     // [DEBUG] 배치 처리 로그
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [Batch Process] %d개의 히트 데이터 처리 및 저장 시도."), HitQueue.Num());
+    UE_LOG(LogTemp, Log, TEXT("[MDF] [Batch Process] %d개의 히트 데이터 처리. 저장소 갱신 시도."), HitQueue.Num());
 
     // -------------------------------------------------------------------------
     // [Step 9: 인터페이스를 통한 데이터 저장 (Save)]
     // 변형이 확정되었으므로 GameState에 백업합니다.
+    // * 덮어쓰기(Overwrite) 방식: 최신 히스토리를 통째로 저장하여 자동 갱신
     // -------------------------------------------------------------------------
     if (ComponentGuid.IsValid())
     {
@@ -208,11 +253,11 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
         
         if (MDF_GS)
         {
-            // "제 최신 상태(HitHistory)를 저장해주세요"
-            MDF_GS->SaveMDFData(ComponentGuid, HitHistory);
+            // [New] 히스토리와 함께 '현재 체력(CurrentHP)'도 저장 요청
+            MDF_GS->SaveMDFData(ComponentGuid, HitHistory, CurrentHP);
             
             // [DEBUG] 저장 요청 로그
-            UE_LOG(LogTemp, Log, TEXT("[MDF] [Save Request] GameState에 데이터 업데이트 요청 완료. (Total History: %d)"), HitHistory.Num());
+            UE_LOG(LogTemp, Log, TEXT("[MDF] [Save Request] GameState 덮어쓰기 완료. (Hit: %d, HP: %.1f)"), HitHistory.Num(), CurrentHP);
         }
     }
     // -------------------------------------------------------------------------
@@ -245,8 +290,8 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
         
         LastAppliedIndex = 0;
         InitializeDynamicMesh(); 
-        // 여기서 return 하지 않고 0부터 다시 적용할 수도 있지만, 보통 수리는 완전 초기화를 의미함.
-        return; 
+        
+        // 리턴하지 않고 진행 (만약 수리 후 남은 데미지가 있다면 처리하기 위해)
     }
 
     // 변경사항이 없으면 리턴
@@ -393,27 +438,28 @@ void UMDF_DeformableComponent::RepairMesh()
     // 1. 서버만 실행 가능
     if (!GetOwner() || !GetOwner()->HasAuthority()) return;
 
-    // 2. 데이터 초기화
+    // 2. 데이터 초기화 (로컬)
     HitHistory.Empty();
     LastAppliedIndex = 0;
+    CurrentHP = MaxHP; // [New] 수리 시 체력도 100% 복구
 
     // 3. GameState에도 초기화(삭제) 요청 [Step 10 추가]
+    //    빈 배열 + MaxHP를 '덮어쓰기' 하여 저장소의 데이터를 초기화합니다.
     if (ComponentGuid.IsValid())
     {
         AGameStateBase* GS = UGameplayStatics::GetGameState(this);
         IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
         if (MDF_GS)
         {
-            // 빈 배열을 저장해서 영구 데이터도 초기화
-            MDF_GS->SaveMDFData(ComponentGuid, TArray<FMDFHitData>());
+            MDF_GS->SaveMDFData(ComponentGuid, TArray<FMDFHitData>(), MaxHP);
             
             // [DEBUG] 초기화 요청 로그
-            UE_LOG(LogTemp, Warning, TEXT("[MDF] [Repair] GameState 데이터 초기화 요청 완료 (GUID: %s)."), *ComponentGuid.ToString());
+            UE_LOG(LogTemp, Warning, TEXT("[MDF] [Repair] GameState 데이터 및 HP 초기화 요청 완료 (GUID: %s)."), *ComponentGuid.ToString());
         }
     }
 
     // 4. 서버 쪽 모양 즉시 복구 (OnRep가 돌지 않을 수 있으므로 명시적 호출)
     InitializeDynamicMesh();
 
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server] 수리 완료! (히스토리 초기화 및 저장소 클리어)"));
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server] 수리 완료! (체력 복구됨)"));
 }

@@ -1,147 +1,162 @@
 // Gihyeon's Inventory Project
+// TestGameState.cpp
 
 #include "TestGameState.h"
-#include "Kismet/GameplayStatics.h" // Save/Load 함수용
+#include "Kismet/GameplayStatics.h" 
+#include "Engine/World.h"
+
+// [필수] SaveGame 클래스 (경로가 Plugins라면 맞춰주세요. 예: "MDF/Public/Save/MDF_SaveActor.h")
+// 만약 못 찾으면 프로젝트 구성에 따라 "MDF_SaveActor.h" 로 시도해보세요.
+#include "Save/MDF_SaveActor.h" 
 
 void ATestGameState::BeginPlay()
 {
     Super::BeginPlay();
 
-    // 서버만 데이터를 로드하면 됩니다 (변형 정보는 리플리케이션 되므로)
     if (HasAuthority())
     {
-        // 1. 저장된 슬롯 확인
         if (UGameplayStatics::DoesSaveGameExist(SaveSlotName, 0))
         {
-            // 2. 파일 불러오기
             UMDF_SaveActor* LoadedGame = Cast<UMDF_SaveActor>(UGameplayStatics::LoadGameFromSlot(SaveSlotName, 0));
 
             if (LoadedGame)
             {
-                // 3. 파일 내용을 내 메모리(Map)로 복구
-                TestSavedMap.Empty(); // 혹시 모를 초기화
+                // 메모리 초기화
+                TestSavedMap.Empty();
+                SavedHPMap.Empty();
+
+                // [로드] 파일 내용을 내 메모리(Map 2개)로 복구
                 for (const auto& Pair : LoadedGame->SavedDeformationMap)
                 {
+                    // 1. 히스토리 복구
                     TestSavedMap.Add(Pair.Key, Pair.Value.History);
+                    
+                    // 2. HP 복구
+                    SavedHPMap.Add(Pair.Key, Pair.Value.SavedHP);
                 }
 
-                UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 새 맵 도착! 데이터 복구 완료 (항목 수: %d)"), TestSavedMap.Num());
+                UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 데이터 로드 완료! (객체 수: %d)"), TestSavedMap.Num());
             }
         }
         else
         {
-            UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 저장된 데이터가 없습니다. (깨끗한 상태로 시작)"));
+            UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 저장된 데이터 없음 (신규 시작)."));
         }
     }
 }
 
-void ATestGameState::EndPlay(const EEndPlayReason::Type EndPlayReason)
-{
-    // 클라이언트는 저장 금지! (서버의 데이터를 0으로 덮어쓸 위험 차단)
-    if (!HasAuthority())
-    {
-        Super::EndPlay(EndPlayReason);
-        return;
-    }
-    
-    // 1. 빈 금고(SaveGame 객체) 생성
-    UMDF_SaveActor* SaveInst = Cast<UMDF_SaveActor>(UGameplayStatics::CreateSaveGameObject(UMDF_SaveActor::StaticClass()));
-
-    if (SaveInst)
-    {
-        // 2. 내 장부의 데이터를 금고에 옮겨 담기
-        // (Wrapper로 포장하는 과정)
-        for (const auto& Pair : TestSavedMap)
-        {
-            FMDFHistoryWrapper Wrapper;
-            Wrapper.History = Pair.Value;
-            SaveInst->SavedDeformationMap.Add(Pair.Key, Wrapper);
-        }
-
-        // 3. 디스크에 쓰기 (저장)
-        if (UGameplayStatics::SaveGameToSlot(SaveInst, SaveSlotName, 0))
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 디스크에 저장 성공! (저장된 객체 수: %d)"), TestSavedMap.Num());
-        }
-    }
-
-    Super::EndPlay(EndPlayReason);
-}
-
-// [MDF Interface 구현]
-void ATestGameState::SaveMDFData(const FGuid& ID, const TArray<FMDFHitData>& Data)
+// [수정됨] 인터페이스 구현: HP 파라미터 추가
+void ATestGameState::SaveMDFData(const FGuid& ID, const TArray<FMDFHitData>& HitHistory, float CurrentHP)
 {
     if (HasAuthority() && ID.IsValid())
     {
-       TestSavedMap.Add(ID, Data);
-       UE_LOG(LogTemp, Log, TEXT("[TestGameState] (메모리) 데이터 갱신됨 ID: %s"), *ID.ToString());
+       // 1. 히스토리 맵 갱신
+       TestSavedMap.Add(ID, HitHistory);
+       
+       // 2. HP 맵 갱신
+       SavedHPMap.Add(ID, CurrentHP);
+       
+       UE_LOG(LogTemp, Log, TEXT("[TestGameState] 메모리 갱신됨 (ID: %s / HP: %.1f). 저장 시도..."), *ID.ToString(), CurrentHP);
+
+       // 3. 즉시 디스크 저장
+       WriteDataToDisk();
     }
 }
 
-bool ATestGameState::LoadMDFData(const FGuid& ID, TArray<FMDFHitData>& OutData)
+// [수정됨] 인터페이스 구현: HP 파라미터 추가
+bool ATestGameState::LoadMDFData(const FGuid& ID, TArray<FMDFHitData>& OutHistory, float& OutHP)
 {
     if (HasAuthority() && ID.IsValid() && TestSavedMap.Contains(ID))
     {
-       OutData = TestSavedMap[ID];
+       // 1. 히스토리 반환
+       OutHistory = TestSavedMap[ID];
+       
+       // 2. HP 반환 (저장된 게 없으면 기본값 1000)
+       if (SavedHPMap.Contains(ID))
+       {
+           OutHP = SavedHPMap[ID];
+       }
+       else
+       {
+           OutHP = 1000.0f; 
+       }
        return true;
     }
     return false;
 }
 
+void ATestGameState::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (HasAuthority())
+    {
+        WriteDataToDisk();
+    }
+    Super::EndPlay(EndPlayReason);
+}
+
 void ATestGameState::Server_SaveAndMoveLevel(FName NextLevelName)
 {
-    // 1. 서버만 실행 가능 (필수)
     if (!HasAuthority()) return;
 
-    // 2. 맵 이름 체크
     if (NextLevelName.IsNone())
     {
         UE_LOG(LogTemp, Error, TEXT("[TestGameState] 이동할 맵 이름이 없습니다!"));
         return;
     }
 
-    UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 맵 이동 요청(%s). 저장 시작..."), *NextLevelName.ToString());
+    UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 맵 이동 요청(%s). 최종 저장 수행..."), *NextLevelName.ToString());
 
-    // -------------------------------------------------------------------------
-    // [저장 로직] (기존 코드 유지)
-    // -------------------------------------------------------------------------
-    UMDF_SaveActor* SaveInst = Cast<UMDF_SaveActor>(UGameplayStatics::CreateSaveGameObject(UMDF_SaveActor::StaticClass()));
-    if (SaveInst)
-    {
-        // 맵에 있는 데이터를 래퍼로 포장해서 저장 인스턴스에 넣기
-        for (const auto& Pair : TestSavedMap)
-        {
-            FMDFHistoryWrapper Wrapper;
-            Wrapper.History = Pair.Value;
-            SaveInst->SavedDeformationMap.Add(Pair.Key, Wrapper);
-        }
+    // 1. 이동 전 저장
+    WriteDataToDisk();
 
-        // 디스크에 기록
-        if (UGameplayStatics::SaveGameToSlot(SaveInst, SaveSlotName, 0))
-        {
-            UE_LOG(LogTemp, Warning, TEXT("[TestGameState] 저장 완료! ServerTravel을 시작합니다."));
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // [핵심 변경 사항] OpenLevel -> ServerTravel
-    // -------------------------------------------------------------------------
+    // 2. ServerTravel
     UWorld* World = GetWorld();
     if (World)
     {
-        // 1. 이동할 경로 문자열 생성 (예: "/Game/Maps/Stage02")
-        // FName을 String으로 변환. 만약 경로 없이 이름만 있다면 경로를 맞춰주는 것이 안전합니다.
-        // 보통은 "/Game/Maps/" + NextLevelName.ToString() 처럼 전체 경로를 씁니다.
         FString TravelURL = NextLevelName.ToString();
-
-        // 2. 옵션 추가 (필요시)
-        // 데디케이티드 서버에서는 단순히 맵 경로만 주면 됩니다.
-        // 리슨 서버라면 "?listen"을 붙여야 하지만, 프로젝트 설정상 데디케이티드이므로 생략 가능.
-        
-        // 3. 서버 트래블 실행
-        // bAbsolute: true면 기존 상태 다 날리고 이동 (일반적), false면 심리스 이동 시도
-        // 일단 확실한 이동을 위해 false(기본값) 또는 true 상황에 맞춰 사용.
-        // 여기서는 안전하게 절대 이동을 수행합니다.
         World->ServerTravel(TravelURL, false, false); 
+    }
+}
+
+// [Helper Function]
+void ATestGameState::WriteDataToDisk()
+{
+    if (!HasAuthority()) return;
+
+    UMDF_SaveActor* SaveInst = Cast<UMDF_SaveActor>(UGameplayStatics::CreateSaveGameObject(UMDF_SaveActor::StaticClass()));
+
+    if (SaveInst)
+    {
+        // 메모리(Map 2개) -> 세이브 객체(Wrapper)로 합치기
+        for (const auto& Pair : TestSavedMap)
+        {
+            FGuid CurrentGUID = Pair.Key;
+            
+            FMDFHistoryWrapper Wrapper;
+            Wrapper.History = Pair.Value; // 히스토리 넣기
+
+            // HP 찾아서 넣기
+            if (SavedHPMap.Contains(CurrentGUID))
+            {
+                Wrapper.SavedHP = SavedHPMap[CurrentGUID];
+            }
+            else
+            {
+                Wrapper.SavedHP = 1000.0f; // 기본값
+            }
+
+            SaveInst->SavedDeformationMap.Add(CurrentGUID, Wrapper);
+        }
+
+        // 파일로 저장
+        if (UGameplayStatics::SaveGameToSlot(SaveInst, SaveSlotName, 0))
+        {
+            // 성공 로그 (필요 시 주석 해제)
+            // UE_LOG(LogTemp, Log, TEXT("[TestGameState] 디스크 저장 완료."));
+        }
+        else
+        {
+            UE_LOG(LogTemp, Error, TEXT("[TestGameState] 디스크 저장 실패!"));
+        }
     }
 }
