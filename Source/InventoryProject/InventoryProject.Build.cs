@@ -18,7 +18,7 @@ public class InventoryProject : ModuleRules
 			"StateTreeModule",
 			"GameplayStateTreeModule",
 			"UMG",
-			"Slate", "MeshDeformation"
+			"Slate", "MeshDeformation", "Inventory"
 		});
 
 		PrivateDependencyModuleNames.AddRange(new string[] { });
