@@ -53,6 +53,12 @@ void UMDF_DeformableComponent::BeginPlay()
        Owner->OnTakePointDamage.RemoveDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
     }
+    
+    // Late Join(중도 입장) 유저를 위한 강제 동기화
+    if (HitHistory.Num() > 0)
+    {
+        OnRep_HitHistory(); 
+    }
 }
 
 void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
