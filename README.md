@@ -22,6 +22,6 @@ Step7 - 서버 RPC 동기화 O
 
 Step8 - 중도 입장 동기화 (히스토리 리스트로 관리) O
 
-Step9 - USaveGame 적용 X
+Step9 - USaveGame 적용 O
 
 Step10 - 버그 계산 및 최적화 X
