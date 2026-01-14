@@ -24,6 +24,6 @@ Step8 - 중도 입장 동기화 (히스토리 리스트로 관리) O
 
 Step9 - USaveGame 적용 O
 
-Step10 - 버그 계산 및 최적화 진행중
+Step10 - 버그 계산 및 최적화 (진행중)
 
-번외 - MoveActor 상호작용시 투표시스템 활성화
+번외 - MoveActor 상호작용시 투표시스템 활성화 X
