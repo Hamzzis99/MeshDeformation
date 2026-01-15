@@ -56,6 +56,7 @@ protected:
 
     /** * [Step 6 최적화] 모인 타격 지점들을 한 프레임의 끝에서 한 번에 연산 
      * (서버에서만 호출되어 RPC를 발송하는 역할로 변경 예정)
+     * [중요] 자식이 호출할 수 있도록 protected 유지
      */
     void ProcessDeformationBatch();
 
@@ -139,7 +140,10 @@ public:
     /** [MeshDeformation|설정] 근접 공격 판정용 클래스 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
     TSubclassOf<UDamageType> MeleeDamageType;
-
+    
+    //메시가 찌그러지지 않는다는 것을 반영하기 위한 데미지 타입
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정")
+    TSubclassOf<UDamageType> BreachDamageType; // 절단 전용 타입
     // -------------------------------------------------------------------------
     // [Step 9: 월드 파티션 영속성 지원]
     // -------------------------------------------------------------------------
@@ -156,7 +160,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "MeshDeformation|수리", meta = (DisplayName = "메시 수리(RepairMesh)"))
     void RepairMesh();
     
-private:
+protected: 
+    // [중요 수정] private -> protected로 변경
+    // 자식 클래스(MiniGame)가 직접 데이터를 넣을 수 있게 허용합니다.
+    
     /** [Step 6] 1프레임 동안 쌓인 타격 지점 리스트 (배칭 큐) */
     TArray<FMDFHitData> HitQueue;
 

@@ -45,11 +45,9 @@ void UMDF_DeformableComponent::BeginPlay()
 
     // -------------------------------------------------------------------------
     // [Step 9: 인터페이스를 통한 데이터 복구 (Load)]
-    // 월드 파티션으로 인해 재로딩되었을 때 GameState에서 데이터를 받아옵니다.
     // -------------------------------------------------------------------------
     if (IsValid(Owner) && Owner->HasAuthority())
     {
-        // 1. GUID가 없으면 이름 기반으로 생성 (안전장치)
         if (!ComponentGuid.IsValid())
         {
             FString UniqueName = Owner->GetName();
@@ -57,17 +55,12 @@ void UMDF_DeformableComponent::BeginPlay()
             if (!ComponentGuid.IsValid()) ComponentGuid = FGuid::NewGuid();
         }
 
-        // 2. 현재 월드의 GameState 가져오기
         AGameStateBase* GS = UGameplayStatics::GetGameState(this);
-
-        // 3. 인터페이스(약속)를 지키는 GameState인지 확인
         IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
         
-        // 4. 맞다면 데이터 로드 요청
         if (MDF_GS)
         {
             TArray<FMDFHitData> SavedData;
-            // "제 ID로 된 데이터 좀 주세요"
             if (MDF_GS->LoadMDFData(ComponentGuid, SavedData))
             {
                 HitHistory = SavedData;
@@ -75,7 +68,6 @@ void UMDF_DeformableComponent::BeginPlay()
             }
         }
     }
-    // -------------------------------------------------------------------------
 
     if (IsValid(Owner))
     {
@@ -89,7 +81,6 @@ void UMDF_DeformableComponent::BeginPlay()
        Owner->OnTakePointDamage.AddDynamic(this, &UMDF_DeformableComponent::HandlePointDamage);
     }
     
-    // Late Join 및 데이터 복구 후 강제 동기화
     if (HitHistory.Num() > 0)
     {
         OnRep_HitHistory(); 
@@ -98,6 +89,7 @@ void UMDF_DeformableComponent::BeginPlay()
 
 void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Damage, AController* InstigatedBy, FVector HitLocation, UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const UDamageType* DamageType, AActor* DamageCauser)
 {
+    // 1. 기본 검증 (서버만 실행, 데미지 0 이하 무시)
     if (!IsValid(GetOwner()) || !GetOwner()->HasAuthority()) return;
     if (!bIsDeformationEnabled || Damage <= 0.0f) return;
 
@@ -107,17 +99,31 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
         Attacker = InstigatedBy->GetPawn();
     }
 
+    // -------------------------------------------------------------------------
+    // [보안 Check] 태그 검사 로직 (복구 완료)
+    // -------------------------------------------------------------------------
     if (IsValid(Attacker))
     {
+        // 1. 자해 방지 (내가 쏜 총에 내가 찌그러지면 안 됨)
+        if (Attacker == GetOwner()) return;
+
+        // 2. 권한 검사: 'Enemy' 혹은 'MDF_Test' 태그가 있어야만 찌그러짐
         bool bIsEnemy = Attacker->ActorHasTag(TEXT("Enemy"));
         bool bIsTester = Attacker->ActorHasTag(TEXT("MDF_Test"));
-        if (!bIsEnemy && !bIsTester) return; 
+
+        // 둘 다 없으면 -> "넌 자격이 없다" -> 리턴 (무시)
+        if (!bIsEnemy && !bIsTester) 
+        {
+            // UE_LOG(LogTemp, Verbose, TEXT("[MDF Base] 공격 권한 없음 (태그 부족)"));
+            return; 
+        }
     }
 
-    // [Log: 데미지 수신 로그]
+    // -------------------------------------------------------------------------
+    // [이하 변형 로직 실행]
+    // -------------------------------------------------------------------------
     FString DmgTypeName = IsValid(DamageType) ? DamageType->GetName() : TEXT("None");
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server 수신] 데미지 감지! 데미지: %.1f / 타입: %s / 공격자: %s"), Damage, *DmgTypeName, *GetNameSafe(Attacker));
-
+    
     UDynamicMeshComponent* MeshComp = Cast<UDynamicMeshComponent>(FHitComponent);
     if (!IsValid(MeshComp))
     {
@@ -126,7 +132,10 @@ void UMDF_DeformableComponent::HandlePointDamage(AActor* DamagedActor, float Dam
 
     if (IsValid(MeshComp))
     {
-        HitQueue.Add(FMDFHitData(ConvertWorldToLocal(HitLocation), ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType ? DamageType->GetClass() : nullptr));
+        // [좌표 변환] 메쉬 기준으로 정확하게 변환
+        FVector LocalPos = ConvertWorldToLocal(HitLocation);
+        
+        HitQueue.Add(FMDFHitData(LocalPos, ConvertWorldDirectionToLocal(ShotFromDirection), Damage, DamageType ? DamageType->GetClass() : nullptr));
 
         if (bShowDebugPoints)
         {
@@ -148,32 +157,21 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
     if (!IsValid(GetOwner()) || !GetOwner()->HasAuthority()) return;
     if (HitQueue.IsEmpty()) return;
 
-    // 1. 히스토리에 누적
     HitHistory.Append(HitQueue);
 
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] %d개의 변형 발생. RPC 발송."), HitQueue.Num());
+    // UE_LOG(LogTemp, Log, TEXT("[MDF] [Server 전송] %d개의 변형 발생."), HitQueue.Num());
 
-    // -------------------------------------------------------------------------
-    // [Step 9: 인터페이스를 통한 데이터 저장 (Save)]
-    // 변형이 확정되었으므로 GameState에 백업합니다.
-    // -------------------------------------------------------------------------
     if (ComponentGuid.IsValid())
     {
         AGameStateBase* GS = UGameplayStatics::GetGameState(this);
         IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
-        
         if (MDF_GS)
         {
-            // "제 최신 상태 좀 저장해주세요"
             MDF_GS->SaveMDFData(ComponentGuid, HitHistory);
         }
     }
-    // -------------------------------------------------------------------------
 
-    // 2. 이펙트 방송
     NetMulticast_PlayEffects(HitQueue);
-
-    // 3. 서버 변형 적용
     OnRep_HitHistory(); 
 
     HitQueue.Empty();
@@ -189,10 +187,9 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
 
     int32 CurrentNum = HitHistory.Num();
 
-    // [Step 10] 수리 감지 로직
     if (CurrentNum < LastAppliedIndex)
     {
-        UE_LOG(LogTemp, Warning, TEXT("[MDF] [Sync] 수리 명령(Reset) 감지! 메쉬를 원상복구합니다."));
+        UE_LOG(LogTemp, Warning, TEXT("[MDF] [Sync] 수리 명령(Reset) 감지!"));
         LastAppliedIndex = 0;
         InitializeDynamicMesh(); 
         return;
@@ -200,13 +197,23 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
 
     if (LastAppliedIndex == CurrentNum) return; 
 
-    // [Log: 클라이언트/서버 동기화 로그]
-    FString NetRole = (Owner->GetLocalRole() == ROLE_Authority) ? TEXT("Server") : TEXT("Client");
-    UE_LOG(LogTemp, Log, TEXT("[MDF] [%s Sync] 변형 데이터 동기화 시작 (인덱스: %d ~ %d)"), *NetRole, LastAppliedIndex, CurrentNum - 1);
-
     const double RadiusSq = FMath::Square((double)DeformRadius);
     const double InverseRadius = 1.0 / (double)DeformRadius;
-        
+    
+    // [디버그용 변수] 가장 가까운 버텍스 거리 찾기
+    double MinDebugDistSq = DBL_MAX;
+    bool bAnyModified = false;
+
+    // [디버그] 적용할 히트 포인트들을 월드 좌표로 찍어보기
+    if (bShowDebugPoints)
+    {
+        for (int32 i = LastAppliedIndex; i < CurrentNum; ++i)
+        {
+            FVector WorldPos = MeshComp->GetComponentTransform().TransformPosition(HitHistory[i].LocalLocation);
+            DrawDebugPoint(GetWorld(), WorldPos, 15.0f, FColor::Blue, false, 5.0f);
+        }
+    }
+
     MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
     {
         for (int32 VertexID : EditMesh.VertexIndicesItr())
@@ -221,6 +228,9 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
 
                 double DistSq = FVector3d::DistSquared(VertexPos, (FVector3d)Hit.LocalLocation);
                 
+                // [디버깅] 최소 거리 갱신
+                if (DistSq < MinDebugDistSq) MinDebugDistSq = DistSq;
+
                 if (DistSq < RadiusSq)
                 {
                     double Distance = FMath::Sqrt(DistSq);
@@ -230,13 +240,9 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
                     float CurrentStrength = DeformStrength * DamageFactor;
 
                     if (Hit.DamageTypeClass && MeleeDamageType && Hit.DamageTypeClass->IsChildOf(MeleeDamageType)) 
-                    {
                         CurrentStrength *= 1.5f; 
-                    }
                     else if (Hit.DamageTypeClass && RangedDamageType && Hit.DamageTypeClass->IsChildOf(RangedDamageType))
-                    {
                         CurrentStrength *= 0.5f; 
-                    }
 
                     TotalOffset += (FVector3d)Hit.LocalDirection * (double)(CurrentStrength * Falloff);
                     bModified = true;
@@ -246,9 +252,24 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
             if (bModified)
             {
                 EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
+                bAnyModified = true;
             }
         }
     }, EDynamicMeshChangeType::GeneralEdit);
+
+    // [결과 리포트] 왜 안 찌그러졌는지 알려줌
+    if (!bAnyModified)
+    {
+        double MinDist = FMath::Sqrt(MinDebugDistSq);
+        UE_LOG(LogTemp, Error, TEXT(">>> [변형 실패] 반경 내 버텍스 없음!"));
+        UE_LOG(LogTemp, Error, TEXT("    - 설정된 반경: %.2f"), DeformRadius);
+        UE_LOG(LogTemp, Error, TEXT("    - 가장 가까운 버텍스 거리: %.2f"), (float)MinDist);
+        UE_LOG(LogTemp, Error, TEXT("    - 해결책: DeformRadius를 늘리거나 메쉬를 더 쪼개세요(Remesh)."));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Log, TEXT(">>> [변형 성공] 메쉬 변형 완료."));
+    }
 
     LastAppliedIndex = CurrentNum;
 
@@ -312,39 +333,66 @@ void UMDF_DeformableComponent::InitializeDynamicMesh()
     }
 }
 
+// -----------------------------------------------------------------------------
+// [Step 5 핵심 수정] 좌표 변환 로직 보정
+// 액터(Actor) 기준이 아니라, 실제 변형되는 메쉬(DynamicMesh) 기준으로 좌표를 변환해야
+// 오차 없이 정확히 그 자리가 찌그러집니다.
+// -----------------------------------------------------------------------------
 FVector UMDF_DeformableComponent::ConvertWorldToLocal(FVector WorldLocation)
 {
+    // 1. 다이나믹 메쉬 컴포넌트를 먼저 찾습니다.
+    UDynamicMeshComponent* MeshComp = nullptr;
+    if (GetOwner())
+    {
+        MeshComp = GetOwner()->FindComponentByClass<UDynamicMeshComponent>();
+    }
+
+    // 2. 메쉬가 있으면 '메쉬 기준' 로컬 좌표를 반환 (정확함)
+    if (IsValid(MeshComp))
+    {
+        return MeshComp->GetComponentTransform().InverseTransformPosition(WorldLocation);
+    }
+
+    // 3. 없으면 액터 기준 (차선책)
     return IsValid(GetOwner()) ? GetOwner()->GetActorTransform().InverseTransformPosition(WorldLocation) : WorldLocation;
 }
 
 FVector UMDF_DeformableComponent::ConvertWorldDirectionToLocal(FVector WorldDirection)
 {
+    // 1. 다이나믹 메쉬 컴포넌트 찾기
+    UDynamicMeshComponent* MeshComp = nullptr;
+    if (GetOwner())
+    {
+        MeshComp = GetOwner()->FindComponentByClass<UDynamicMeshComponent>();
+    }
+
+    // 2. 메쉬 기준 로컬 방향 반환
+    if (IsValid(MeshComp))
+    {
+        return MeshComp->GetComponentTransform().InverseTransformVector(WorldDirection);
+    }
+
+    // 3. 차선책
     return IsValid(GetOwner()) ? GetOwner()->GetActorTransform().InverseTransformVector(WorldDirection) : WorldDirection;
 }
 
 void UMDF_DeformableComponent::RepairMesh()
 {
-    // 1. 서버만 실행 가능
     if (!GetOwner() || !GetOwner()->HasAuthority()) return;
 
-    // 2. 데이터 초기화
     HitHistory.Empty();
     LastAppliedIndex = 0;
 
-    // 3. GameState에도 초기화(삭제) 요청 [Step 10 추가]
     if (ComponentGuid.IsValid())
     {
         AGameStateBase* GS = UGameplayStatics::GetGameState(this);
         IMDF_GameStateInterface* MDF_GS = Cast<IMDF_GameStateInterface>(GS);
         if (MDF_GS)
         {
-            // 빈 배열을 저장해서 초기화
             MDF_GS->SaveMDFData(ComponentGuid, TArray<FMDFHitData>());
         }
     }
 
-    // 4. 서버 쪽 모양 즉시 복구
     InitializeDynamicMesh();
-
     UE_LOG(LogTemp, Warning, TEXT("[MDF] [Server] 수리 완료! (히스토리 초기화됨)"));
 }
