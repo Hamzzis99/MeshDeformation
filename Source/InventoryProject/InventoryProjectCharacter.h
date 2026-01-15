@@ -9,6 +9,7 @@
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
+class AMDF_BaseWeapon; // [New] 무기 클래스 전방 선언
 
 UCLASS(abstract)
 class AInventoryProjectCharacter : public ACharacter
@@ -35,12 +36,19 @@ protected:
     UPROPERTY(EditAnywhere, Category="Input")
     UInputAction* FireAction;
 
-    /** 발사할 투사체 클래스 */
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat")
-    TSubclassOf<class AInventoryProjectProjectile> ProjectileClass;
+    // [삭제됨] 하드코딩된 투사체 클래스는 이제 필요 없습니다.
+    // TSubclassOf<class AInventoryProjectProjectile> ProjectileClass;
+
+    // [New] 현재 장착 중인 무기 액터
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat", meta = (DisplayName = "현재 무기 (Current Weapon)"))
+    TObjectPtr<AMDF_BaseWeapon> CurrentWeapon;
 
 public:
     AInventoryProjectCharacter();  
+
+    // [New] 외부(GameMode)에서 무기를 쥐어줄 때 사용하는 함수
+    UFUNCTION(BlueprintCallable, Category="Combat", meta = (DisplayName = "무기 장착 (Equip Weapon)"))
+    void EquipWeapon(TSubclassOf<AMDF_BaseWeapon> NewWeaponClass);
 
 protected:
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -48,14 +56,22 @@ protected:
     void Move(const FInputActionValue& Value);
     void Look(const FInputActionValue& Value);
 
-    /** 사격 로직 */
-    void OnFire(const FInputActionValue& Value);
+    // [New] 사격 로직 분리 (누름/뗌)
+    void OnFireStart(const FInputActionValue& Value);
+    void OnFireStop(const FInputActionValue& Value);
 
-    /** 서버 사격 RPC */
-	UFUNCTION(Server, Reliable)
-	void Server_Fire(FVector Location, FRotator Rotation);
+    // [New] 서버 RPC (무기 사용 요청)
+    UFUNCTION(Server, Reliable)
+    void Server_StartFire();
+
+    UFUNCTION(Server, Reliable)
+    void Server_StopFire();
+
+    // [삭제됨] 예전 발사 RPC
+    // void Server_Fire(FVector Location, FRotator Rotation);
 
 public:
+    // 기존 조작 함수 유지
     UFUNCTION(BlueprintCallable, Category="Input")
     virtual void DoMove(float Right, float Forward);
     UFUNCTION(BlueprintCallable, Category="Input")

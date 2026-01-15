@@ -1,11 +1,14 @@
 #include "InventoryProjectCharacter.h"
-#include "InventoryProjectProjectile.h"
+#include "InventoryProjectProjectile.h" // 이건 필요 없을 수도 있으나 일단 유지
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
+
+// [New] 무기 헤더 포함 필수
+#include "Weapons/MDF_BaseWeapon.h"
 
 AInventoryProjectCharacter::AInventoryProjectCharacter()
 {
@@ -28,46 +31,84 @@ void AInventoryProjectCharacter::SetupPlayerInputComponent(UInputComponent* Play
        EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
        EIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
        
+       // [수정] 사격 입력: 누름(Started)과 뗌(Completed)을 분리
        if (FireAction) {
-          EIC->BindAction(FireAction, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnFire);
+          EIC->BindAction(FireAction, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnFireStart);
+          EIC->BindAction(FireAction, ETriggerEvent::Completed, this, &AInventoryProjectCharacter::OnFireStop);
        }
     }
 }
 
-void AInventoryProjectCharacter::OnFire(const FInputActionValue& Value)
+// -----------------------------------------------------------------------------
+// [New] 무기 장착 시스템
+// -----------------------------------------------------------------------------
+void AInventoryProjectCharacter::EquipWeapon(TSubclassOf<AMDF_BaseWeapon> NewWeaponClass)
 {
-    // [디버깅] 클라이언트 입력 확인 (하늘색)
-    if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 2.f, FColor::Cyan, TEXT("Fire! (Client Request)"));
-    UE_LOG(LogTemp, Log, TEXT("OnFire: Client requested shoot."));
+    // 서버에서만 실행 (멀티플레이 안전성)
+    if (!HasAuthority()) return;
 
-    FVector Loc = GetActorLocation() + (GetActorForwardVector() * 100.0f);
-    FRotator Rot = GetControlRotation();
+    // 기존 무기 제거
+    if (CurrentWeapon)
+    {
+        CurrentWeapon->Destroy();
+        CurrentWeapon = nullptr;
+    }
 
-    Server_Fire(Loc, Rot);
+    if (!NewWeaponClass) return;
+
+    // 새 무기 스폰
+    FActorSpawnParameters Params;
+    Params.Owner = this;
+    Params.Instigator = this;
+    
+    AMDF_BaseWeapon* NewWeapon = GetWorld()->SpawnActor<AMDF_BaseWeapon>(NewWeaponClass, GetActorLocation(), GetActorRotation(), Params);
+
+    if (NewWeapon)
+    {
+        // 소켓 이름은 스켈레탈 메시에서 만든 이름과 일치해야 함 ("WeaponSocket")
+        NewWeapon->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetIncludingScale, TEXT("WeaponSocket"));
+        CurrentWeapon = NewWeapon;
+
+        UE_LOG(LogTemp, Log, TEXT("[Character] Equipped Weapon: %s"), *NewWeapon->GetName());
+    }
 }
 
-void AInventoryProjectCharacter::Server_Fire_Implementation(FVector Location, FRotator Rotation)
+// -----------------------------------------------------------------------------
+// [New] 사격 입력 처리 (Client -> Server -> Weapon)
+// -----------------------------------------------------------------------------
+
+void AInventoryProjectCharacter::OnFireStart(const FInputActionValue& Value)
 {
-    // [디버깅] 서버 실행 확인 (노란색)
-    UE_LOG(LogTemp, Warning, TEXT("Server: Attempting to spawn projectile for [%s]"), *GetName());
+    // 로컬 즉시 반응 (선택 사항: 애니메이션 등)
+    // 서버로 요청
+    Server_StartFire();
+}
 
-    if (ProjectileClass)
-    {
-       FActorSpawnParameters SpawnParams;
-       SpawnParams.Owner = this;
-       SpawnParams.Instigator = GetInstigator();
+void AInventoryProjectCharacter::OnFireStop(const FInputActionValue& Value)
+{
+    // 서버로 요청
+    Server_StopFire();
+}
 
-       GetWorld()->SpawnActor<AInventoryProjectProjectile>(ProjectileClass, Location, Rotation, SpawnParams);
-    }
-    else
+void AInventoryProjectCharacter::Server_StartFire_Implementation()
+{
+    if (CurrentWeapon)
     {
-       // [디버깅] 클래스 미등록 에러 (빨간색)
-       UE_LOG(LogTemp, Error, TEXT("Server Error: ProjectileClass is NULL! Check Character BP."));
-       if (GEngine) GEngine->AddOnScreenDebugMessage(-1, 5.f, FColor::Red, TEXT("ERROR: Projectile Class NOT set in BP!"));
+        CurrentWeapon->StartFire(); // 무기에게 "쏴!" 명령
     }
 }
 
-// 이동/시선 처리
+void AInventoryProjectCharacter::Server_StopFire_Implementation()
+{
+    if (CurrentWeapon)
+    {
+        CurrentWeapon->StopFire(); // 무기에게 "멈춰!" 명령
+    }
+}
+
+// -----------------------------------------------------------------------------
+// 기존 이동/시선 처리 (유지)
+// -----------------------------------------------------------------------------
 void AInventoryProjectCharacter::Move(const FInputActionValue& V) { FVector2D Vec = V.Get<FVector2D>(); DoMove(Vec.X, Vec.Y); }
 void AInventoryProjectCharacter::Look(const FInputActionValue& V) { FVector2D Vec = V.Get<FVector2D>(); DoLook(Vec.X, Vec.Y); }
 void AInventoryProjectCharacter::DoMove(float R, float F) { 
