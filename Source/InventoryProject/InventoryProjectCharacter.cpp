@@ -29,31 +29,40 @@ AInventoryProjectCharacter::AInventoryProjectCharacter()
 
 void AInventoryProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
-    if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent)) {
-       EIC->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
-       EIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
-       EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Move);
-       EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
-       EIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
-       
-       // 사격 입력
-       if (FireAction) {
-          EIC->BindAction(FireAction, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnFireStart);
-          EIC->BindAction(FireAction, ETriggerEvent::Completed, this, &AInventoryProjectCharacter::OnFireStop);
-       }
+    // Enhanced Input 컴포넌트로 캐스팅
+    if (UEnhancedInputComponent* EIC = Cast<UEnhancedInputComponent>(PlayerInputComponent))
+    {
+        // 1. 점프 (기존)
+        EIC->BindAction(JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+        EIC->BindAction(JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 
-       // [무기 교체 입력]
-       // 만약 Enhanced Input에 Slot1, Slot2 액션을 아직 안 만드셨다면
-       // 프로젝트 세팅 -> 입력 -> Action Mapping에서 "Slot1", "Slot2"를 추가하고
-       // 아래처럼 레거시 바인딩을 쓰셔도 됩니다. (둘 다 안전하게 넣어둠)
+        // 2. 이동/시선 (기존)
+        EIC->BindAction(MoveAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Move);
+        EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
+        EIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
        
-       // 1. Enhanced Input 방식 (변수가 할당되어 있다면)
-       if (EquipSlot1Action) EIC->BindAction(EquipSlot1Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot1);
-       if (EquipSlot2Action) EIC->BindAction(EquipSlot2Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot2);
+        // 3. [사격] (수정됨: 누름/뗌 분리)
+        if (FireAction) 
+        {
+            EIC->BindAction(FireAction, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnFireStart);
+            EIC->BindAction(FireAction, ETriggerEvent::Completed, this, &AInventoryProjectCharacter::OnFireStop);
+        }
+
+        // 4. [무기 교체] (New! 여기가 핵심입니다)
+        // 헤더에 선언한 EquipSlot1Action 변수가 에디터에서 할당되어 있다면 바인딩
+        if (EquipSlot1Action) 
+        {
+            EIC->BindAction(EquipSlot1Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot1);
+        }
+
+        if (EquipSlot2Action) 
+        {
+            EIC->BindAction(EquipSlot2Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot2);
+        }
     }
     else
     {
-        // 2. Legacy Input 방식 (백업)
+        // (백업) Enhanced Input이 아닐 경우 레거시 바인딩
         PlayerInputComponent->BindAction("Slot1", IE_Pressed, this, &AInventoryProjectCharacter::OnEquipSlot1);
         PlayerInputComponent->BindAction("Slot2", IE_Pressed, this, &AInventoryProjectCharacter::OnEquipSlot2);
     }
