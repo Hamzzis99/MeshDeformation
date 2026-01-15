@@ -1,16 +1,15 @@
 ﻿// Gihyeon's MeshDeformation Project
+// File: Source/MeshDeformation/Weapon/MDF_LaserWeapon.cpp
 
-#include "Weapons/MDF_LaserWeapon.h" 
-#include "Components/MDF_MiniGameComponent.h"
+#include "Weapons/MDF_LaserWeapon.h" // 헤더 경로 확인
+#include "Components/MDF_MiniGameComponent.h" 
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
-#include "GameFramework/PlayerController.h"
-#include "Kismet/GameplayStatics.h"
 
 AMDF_LaserWeapon::AMDF_LaserWeapon()
 {
     PrimaryActorTick.bCanEverTick = true;
-    PrimaryActorTick.bStartWithTickEnabled = false; // 쏠 때만 켭니다.
+    PrimaryActorTick.bStartWithTickEnabled = false; 
 
     BatteryDrainRate = 20.0f;
     LaserColor = FColor::Red;
@@ -24,12 +23,7 @@ void AMDF_LaserWeapon::BeginPlay()
 
 void AMDF_LaserWeapon::StartFire()
 {
-    if (CurrentAmmo <= 0.0f)
-    {
-       UE_LOG(LogTemp, Warning, TEXT("[레이저] 배터리 방전!"));
-       return;
-    }
-
+    if (CurrentAmmo <= 0.0f) return;
     SetActorTickEnabled(true);
     UE_LOG(LogTemp, Log, TEXT("[레이저] 가동 시작"));
 }
@@ -38,30 +32,15 @@ void AMDF_LaserWeapon::StopFire()
 {
     SetActorTickEnabled(false);
     
-    // [중요] 쏘다가 멈췄으면, 마킹도 끝내야 함
+    // [로직 변경] 마우스를 뗄 때 비로소 계산에 들어갑니다.
     if (CurrentTargetComp)
     {
-       // 마지막 지점을 계산해야 합니다.
-       // 레이저가 꺼지는 순간의 시점 정보를 가져옵니다.
-       FVector TraceStart, TraceDir;
-       APlayerController* PC = Cast<APlayerController>(GetOwner()->GetInstigatorController());
+       // 마지막으로 닿았던 곳(혹은 허공)을 넘겨주며 종료 신호
+       // (컴포넌트가 알아서 마지막 유효 좌표를 쓸 것이므로 여기선 단순 신호용)
+       FVector EndPos = MuzzleLocation ? MuzzleLocation->GetComponentLocation() + (MuzzleLocation->GetForwardVector() * FireRange) : GetActorLocation();
        
-       FVector EndPos;
-       if (PC)
-       {
-           int32 SizeX, SizeY;
-           PC->GetViewportSize(SizeX, SizeY);
-           UGameplayStatics::DeprojectScreenToWorld(PC, FVector2D(SizeX/2.f, SizeY/2.f), TraceStart, TraceDir);
-           EndPos = TraceStart + (TraceDir * FireRange);
-       }
-       else
-       {
-           EndPos = GetActorLocation() + (GetActorForwardVector() * FireRange);
-       }
-
-       // [수정됨] FinishMarking -> EndMarking으로 변경
        CurrentTargetComp->EndMarking(EndPos);
-       CurrentTargetComp = nullptr;
+       CurrentTargetComp = nullptr; // 소유권 해제
     }
 
     UE_LOG(LogTemp, Log, TEXT("[레이저] 가동 중지"));
@@ -71,7 +50,6 @@ void AMDF_LaserWeapon::Tick(float DeltaTime)
 {
     Super::Tick(DeltaTime);
 
-    // 1. 배터리 소모
     float DrainAmount = BatteryDrainRate * DeltaTime;
     CurrentAmmo -= DrainAmount;
 
@@ -82,88 +60,75 @@ void AMDF_LaserWeapon::Tick(float DeltaTime)
        return;
     }
 
-    // 2. 레이저 로직 수행
     ProcessLaserTrace();
 }
 
 void AMDF_LaserWeapon::ProcessLaserTrace()
 {
-    // 1. 플레이어 컨트롤러 가져오기 (화면 좌표 계산용)
-    APlayerController* PC = Cast<APlayerController>(GetOwner()->GetInstigatorController());
-    if (!PC) return;
+    // 총구 기준 발사
+    FVector Start = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
+    FVector Forward = MuzzleLocation ? MuzzleLocation->GetForwardVector() : GetActorForwardVector();
+    FVector End = Start + (Forward * FireRange);
 
-    // 2. 뷰포트 중앙 좌표 구하기
-    int32 ViewportSizeX, ViewportSizeY;
-    PC->GetViewportSize(ViewportSizeX, ViewportSizeY);
-    FVector2D ViewportCenter(ViewportSizeX / 2.f, ViewportSizeY / 2.f);
-
-    // 3. 화면 중앙을 월드 좌표로 변환 (Deproject)
-    FVector TraceStart;
-    FVector TraceDir; // 카메라가 보는 방향
-    if (!UGameplayStatics::DeprojectScreenToWorld(PC, ViewportCenter, TraceStart, TraceDir)) return;
-
-    // 4. 레이저 끝 지점 계산
-    FVector TraceEnd = TraceStart + (TraceDir * FireRange);
-
-    // 5. 실제 레이저 쏘기 (LineTrace)
     FHitResult HitResult;
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(this);
-    Params.AddIgnoredActor(GetOwner()); // 나 자신(캐릭터) 무시
+    Params.AddIgnoredActor(GetOwner());
 
-    bool bHit = GetWorld()->LineTraceSingleByChannel(HitResult, TraceStart, TraceEnd, ECC_Visibility, Params);
+    bool bHit = GetWorld()->LineTraceSingleByChannel(HitResult, Start, End, ECC_Visibility, Params);
 
-    // [시각 효과 보정]
-    // 총구(Muzzle)에서 나가는 것처럼 보이게 하려면?
-    FVector VisualStart = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
-    FVector VisualEnd = bHit ? HitResult.Location : TraceEnd;
-
+    // 시각 효과
     if (bHit)
     {
-        // 디버그 라인: 총구 -> 맞은 곳
-        DrawDebugLine(GetWorld(), VisualStart, HitResult.Location, LaserColor, false, 0.1f, 0, 2.0f);
+        DrawDebugLine(GetWorld(), Start, HitResult.Location, LaserColor, false, 0.1f, 0, 2.0f);
         DrawDebugPoint(GetWorld(), HitResult.Location, 10.0f, LaserColor, false, 0.1f);
     }
     else
     {
-        // 디버그 라인: 총구 -> 허공
-        DrawDebugLine(GetWorld(), VisualStart, TraceEnd, LaserColor, false, 0.1f, 0, 1.0f);
+        DrawDebugLine(GetWorld(), Start, End, LaserColor, false, 0.1f, 0, 1.0f);
     }
 
     // -------------------------------------------------------------------------
-    // [연동 로직] 미니게임 컴포넌트 찾기 및 업데이트
+    // [핵심 로직] 타겟 유지 및 스위칭 (Stickiness Logic)
     // -------------------------------------------------------------------------
-    UMDF_MiniGameComponent* HitWallComp = nullptr;
+    
+    UMDF_MiniGameComponent* NewWallComp = nullptr;
+
+    // 벽을 맞췄을 때만 NewWallComp 갱신
     if (bHit && HitResult.GetActor())
     {
-        HitWallComp = HitResult.GetActor()->FindComponentByClass<UMDF_MiniGameComponent>();
+       NewWallComp = HitResult.GetActor()->FindComponentByClass<UMDF_MiniGameComponent>();
     }
 
-    // [상태 머신 로직 수정] Start / Update / End를 정확히 호출
-
-    // 1. 타겟이 바뀌었거나(다른 벽), 벽이 아닌 곳(허공)을 보고 있을 때
-    if (HitWallComp != CurrentTargetComp)
+    // 1. 벽을 맞췄다! (NewWallComp 존재)
+    if (NewWallComp)
     {
-        // 기존에 칠하던 벽이 있었다면 종료 처리 (EndMarking)
-        if (CurrentTargetComp)
+        // 1-A. 다른 벽으로 넘어갔다? (Target Switching)
+        if (CurrentTargetComp != NewWallComp)
         {
-            // 허공을 보고 있다면 TraceEnd, 다른 벽을 보고 있다면 HitResult.Location을 넘김
-            FVector EndPos = bHit ? HitResult.Location : TraceEnd;
-            CurrentTargetComp->EndMarking(EndPos); 
-        }
+            // 기존 벽이 있었다면 즉시 계산하고 끝냄
+            if (CurrentTargetComp)
+            {
+                CurrentTargetComp->EndMarking(HitResult.Location); 
+            }
 
-        // 새로운 벽을 보기 시작했다면 시작 처리 (StartMarking)
-        if (HitWallComp)
+            // 새 벽 시작
+            NewWallComp->StartMarking(HitResult.Location);
+            CurrentTargetComp = NewWallComp;
+        }
+        // 1-B. 같은 벽이다?
+        else
         {
-            HitWallComp->StartMarking(HitResult.Location);
+            // 계속 그리기 (기록)
+            CurrentTargetComp->UpdateMarking(HitResult.Location);
         }
-
-        CurrentTargetComp = HitWallComp; // 타겟 갱신
     }
-    // 2. 같은 벽을 계속 보고 있을 때 -> 업데이트 (UpdateMarking)
-    else if (CurrentTargetComp)
+    // 2. 허공을 쏘고 있다! (NewWallComp 없음)
+    else
     {
-        // [수정됨] UpdateLaserHit -> UpdateMarking
-        CurrentTargetComp->UpdateMarking(HitResult.Location);
+        // [중요] 타겟을 해제하지 않음! (CurrentTargetComp 유지)
+        // 빗나가도 액터는 마지막 상태를 기억하고 있어야 하므로, 
+        // 여기서는 아무 함수도 호출하지 않고 가만히 둡니다.
+        // 나중에 손을 떼거나(StopFire), 다른 벽을 맞추면 그때 EndMarking이 불립니다.
     }
 }
