@@ -13,7 +13,9 @@
 #include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "GeometryScript/MeshNormalsFunctions.h"
 
-// [★필수 추가] 이 헤더가 없으면 'Options' 구조체 에러가 뜹니다. (탄젠트 계산용)
+// [★필수 추가 1] UV 생성 함수를 사용하기 위해 이 헤더가 꼭 필요합니다.
+#include "GeometryScript/MeshUVFunctions.h"
+// [★필수 추가 2] 구조체 에러 방지용 (탄젠트/UV 옵션 등)
 #include "GeometryScript/GeometryScriptTypes.h" 
 
 UMDF_MiniGameComponent::UMDF_MiniGameComponent()
@@ -270,7 +272,6 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
     if (!WeakSpots.IsValidIndex(WeakSpotIndex)) return;
     if (WeakSpots[WeakSpotIndex].bIsBroken) return; 
 
-    // 상태 업데이트
     WeakSpots[WeakSpotIndex].bIsBroken = true;
 
     UDynamicMeshComponent* DynComp = GetOwner() ? GetOwner()->FindComponentByClass<UDynamicMeshComponent>() : nullptr;
@@ -278,29 +279,23 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
 
     UDynamicMesh* TargetMesh = DynComp->GetDynamicMesh();
 
-    // 1. 절단용 칼(Tool Mesh) 만들기
+    // 1. 절단용 칼 생성
     UDynamicMesh* ToolMesh = NewObject<UDynamicMesh>(this); 
     FBox CutBox = WeakSpots[WeakSpotIndex].LocalBox;
-    FVector Center = CutBox.GetCenter();
-    FVector Extent = CutBox.GetExtent();
     
-    // [중요] 리더가 그린 라인 크기 '그대로' 적용 (정밀 절단)
-    // 깊이(관통 방향)는 Marking 단계에서 이미 충분히 길게 설정되어 있음.
-    float SizeX = Extent.X * 2.0f;
-    float SizeY = Extent.Y * 2.0f;
-    float SizeZ = Extent.Z * 2.0f;
-
     UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(
         ToolMesh, 
         FGeometryScriptPrimitiveOptions(), 
-        FTransform(Center), 
-        SizeX, SizeY, SizeZ
+        FTransform(CutBox.GetCenter()), 
+        CutBox.GetExtent().X * 2.0f, 
+        CutBox.GetExtent().Y * 2.0f, 
+        CutBox.GetExtent().Z * 2.0f
     );
 
-    // 2. 빼기 연산 (Boolean Subtract)
+    // 2. 빼기 연산
     FGeometryScriptMeshBooleanOptions BoolOptions;
-    BoolOptions.bFillHoles = true;       // 절단면 메우기 (Solid 유지)
-    BoolOptions.bSimplifyOutput = false; // 형태 단순화 끄기 (정확한 박스 모양)
+    BoolOptions.bFillHoles = true;       
+    BoolOptions.bSimplifyOutput = false; 
 
     UGeometryScriptLibrary_MeshBooleanFunctions::ApplyMeshBoolean(
         TargetMesh, FTransform::Identity, ToolMesh, FTransform::Identity, 
@@ -308,21 +303,35 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
     );
     
     // -------------------------------------------------------------------------
-    // [Step 3] 마무리 및 렌더링 업데이트 (핵심)
+    // [★핵심 수정] 인자 순서 변경 및 옵션 삭제
     // -------------------------------------------------------------------------
     
-    // 법선(Normal) 재계산: 빛의 반사 방향 갱신
+    // 1. 법선(Normal) 재계산
     UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(TargetMesh, FGeometryScriptCalculateNormalsOptions());
     
-    // [★핵심] 탄젠트(Tangent) 재계산
-    // 움직이는 물체(Movable)가 빛을 받을 때 투명해지거나 검게 나오는 버그를 방지합니다.
+    // 2. [수정됨] UV 재생성
+    FBox MeshBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(TargetMesh);
+    FTransform BoxTransform = FTransform::Identity;
+    BoxTransform.SetTranslation(MeshBounds.GetCenter());
+    BoxTransform.SetScale3D(MeshBounds.GetSize());
+
+    // [★여기 수정] 인자 순서: (타겟, UV채널, 트랜스폼, 선택영역)
+    // 옵션 구조체 없이, 숫자 0(채널)을 두 번째에 넣어야 합니다.
+    UGeometryScriptLibrary_MeshUVFunctions::SetMeshUVsFromBoxProjection(
+        TargetMesh, 
+        0, // [중요] UV Channel Index (int)가 여기 와야 함!
+        BoxTransform, 
+        FGeometryScriptMeshSelection()
+    );
+
+    // 3. 탄젠트(Tangent) 재계산 (UV가 생겼으므로 정상 작동)
     UGeometryScriptLibrary_MeshNormalsFunctions::ComputeTangents(TargetMesh, FGeometryScriptTangentsOptions());
     
-    // 충돌체 및 렌더링 알림
+    // 4. 업데이트
     DynComp->UpdateCollision(true); 
     DynComp->NotifyMeshUpdated();
 
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] >>> 정밀 절단 완료 (탄젠트 포함) (Index: %d)"), WeakSpotIndex);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] 정밀 절단 완료 (UV+Tangent) (Index: %d)"), WeakSpotIndex);
 }
 
 // -----------------------------------------------------------------------------
