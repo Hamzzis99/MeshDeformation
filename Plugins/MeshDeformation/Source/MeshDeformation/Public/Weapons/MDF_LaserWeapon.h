@@ -6,10 +6,12 @@
 #include "Weapons/MDF_BaseWeapon.h"
 #include "MDF_LaserWeapon.generated.h"
 
+// [전방 선언] 미니게임 컴포넌트를 알기 위해
+class UMDF_MiniGameComponent;
+
 /**
- * [Step 3] 리더용 레이저 무기 (Marker)
- * - 특징: 마우스를 누르고 있는 동안 계속 나감 (Tick 사용)
- * - 기능: 벽에 닿으면 빨간색 선을 그리고, 나중에 '약점'을 심게 됨.
+ * [Step 2] 리더용 레이저 무기
+ * - Tick을 돌며 레이저를 쏘고, 벽(MiniGameComponent)을 발견하면 마킹 명령을 내립니다.
  */
 UCLASS()
 class MESHDEFORMATION_API AMDF_LaserWeapon : public AMDF_BaseWeapon
@@ -23,15 +25,15 @@ protected:
 	virtual void BeginPlay() override;
 
 public:
-	// 매 프레임 레이저를 쏘기 위해 Tick을 사용합니다.
+	// 매 프레임 레이저 추적
 	virtual void Tick(float DeltaTime) override;
 
-	// 부모의 Start/Stop을 오버라이드해서 타이머 대신 Tick을 켜고 끕니다.
+	// 발사 시작/중지 오버라이드
 	virtual void StartFire() override;
 	virtual void StopFire() override;
 
 protected:
-	// 실제 레이저 로직 (Tick에서 호출됨)
+	// 레이저 로직
 	void ProcessLaserTrace();
 
 protected:
@@ -40,4 +42,9 @@ protected:
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Effects", meta = (DisplayName = "레이저 색상 (Debug)"))
 	FColor LaserColor;
+
+private:
+	// [New] 현재 마킹 중인 벽 컴포넌트 (기억용)
+	UPROPERTY()
+	TObjectPtr<UMDF_MiniGameComponent> CurrentTargetComp;
 };
