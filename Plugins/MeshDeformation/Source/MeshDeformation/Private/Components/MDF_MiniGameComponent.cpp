@@ -5,6 +5,8 @@
 #include "Components/DynamicMeshComponent.h"
 #include "UDynamicMesh.h"
 #include "DrawDebugHelpers.h"
+
+// [Geometry Script 헤더]
 #include "GeometryScript/MeshQueryFunctions.h" 
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshPrimitiveFunctions.h"
@@ -15,10 +17,14 @@ UMDF_MiniGameComponent::UMDF_MiniGameComponent()
     PrimaryComponentTick.bCanEverTick = true; 
 }
 
+// [좌표 변환]
 FVector UMDF_MiniGameComponent::GetLocalLocationFromWorld(FVector WorldLoc) const
 {
     UDynamicMeshComponent* DynComp = GetOwner() ? GetOwner()->FindComponentByClass<UDynamicMeshComponent>() : nullptr;
-    if (DynComp) return DynComp->GetComponentTransform().InverseTransformPosition(WorldLoc);
+    if (DynComp)
+    {
+        return DynComp->GetComponentTransform().InverseTransformPosition(WorldLoc);
+    }
     return GetOwner() ? GetOwner()->GetActorTransform().InverseTransformPosition(WorldLoc) : WorldLoc;
 }
 
@@ -28,15 +34,16 @@ void UMDF_MiniGameComponent::StartMarking(FVector WorldLocation)
     bIsValidCut = false; 
     bHasFirstPoint = false;
 
-    // 중앙에서 클릭해도 됨 (일단 시작점 기록)
+    // 시작점 기록
     LocalStartPoint = GetLocalLocationFromWorld(WorldLocation);
 
-    // 운 좋게 시작부터 테두리면 바로 등록
+    // 로그 출력
+    UE_LOG(LogTemp, Log, TEXT("--- [MiniGame] 드래그 시작 (Local: %s) ---"), *LocalStartPoint.ToString());
+
     if (IsOnBoundary(LocalStartPoint, 15.0f))
     {
         bHasFirstPoint = true;
         LocalFirstBoundaryPoint = LocalStartPoint;
-        UE_LOG(LogTemp, Log, TEXT("[MiniGame] 시작부터 테두리! Point A 고정."));
     }
 }
 
@@ -51,96 +58,77 @@ void UMDF_MiniGameComponent::UpdateMarking(FVector WorldLocation)
     
     FBox MeshBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(DynComp->GetDynamicMesh());
 
-    // -------------------------------------------------------------------------
-    // [1단계] 첫 번째 테두리(Point A) 찾기 (아직 못 찾았다면)
-    // -------------------------------------------------------------------------
+    // 1. 첫 테두리 점 찾기
     if (!bHasFirstPoint)
     {
         if (IsOnBoundary(CurrentLocalPos, 15.0f))
         {
             bHasFirstPoint = true;
             LocalFirstBoundaryPoint = CurrentLocalPos;
-            UE_LOG(LogTemp, Log, TEXT("[MiniGame] 드래그 중 테두리 발견! Point A 고정."));
+            UE_LOG(LogTemp, Log, TEXT("[MiniGame] 드래그 중 테두리 진입!"));
         }
     }
 
-    // -------------------------------------------------------------------------
-    // [2단계] 박스 그리기 (면 방향 고정 로직)
-    // -------------------------------------------------------------------------
-    FVector PointA = bHasFirstPoint ? LocalFirstBoundaryPoint : LocalStartPoint;
+    // 2. [핵심 로직] 아래쪽으로 자동 확장 (Guillotine Logic)
+    FVector PointA = LocalStartPoint;
     FVector PointB = CurrentLocalPos;
 
-    // [핵심 수정] Point A가 어느 면에 붙어있는지로 두께 방향 결정
-    // (이렇게 해야 중앙을 지나가도 박스가 뒤집히지 않음)
-    bool bIsFacingX = true; // 기본값: 앞면(X)
-
+    // 면 감지 (X면 vs Y면)
     float DistMinX = FMath::Abs(PointA.X - MeshBounds.Min.X);
     float DistMaxX = FMath::Abs(PointA.X - MeshBounds.Max.X);
     float DistMinY = FMath::Abs(PointA.Y - MeshBounds.Min.Y);
     float DistMaxY = FMath::Abs(PointA.Y - MeshBounds.Max.Y);
+    // Z축은 이제 무시 (높이는 사용자가 정하는 게 아니라 바닥까지 깔리니까)
 
-    bool bOnXFace = (DistMinX < 15.0f || DistMaxX < 15.0f);
-    bool bOnYFace = (DistMinY < 15.0f || DistMaxY < 15.0f);
-
-    if (bHasFirstPoint)
-    {
-        // 첫 점을 찾았다면, 그 점이 붙은 면을 기준으로 함
-        if (bOnXFace && !bOnYFace) bIsFacingX = true;       // 앞/뒤 면
-        else if (!bOnXFace && bOnYFace) bIsFacingX = false; // 옆 면
-        else 
-        {
-            // 코너(모서리)라서 애매하면? 드래그 방향(Delta)으로 판단
-            float DeltaX = FMath::Abs(PointA.X - PointB.X);
-            float DeltaY = FMath::Abs(PointA.Y - PointB.Y);
-            // Y축으로 많이 움직였으면 앞면(X)을 긋는 것임
-            bIsFacingX = (DeltaY > DeltaX); 
-        }
-    }
-    else
-    {
-        // 아직 첫 점도 못 찾았으면(허공), 그냥 단순 Delta로 추측
-        float DeltaX = FMath::Abs(PointA.X - PointB.X);
-        float DeltaY = FMath::Abs(PointA.Y - PointB.Y);
-        bIsFacingX = (DeltaY >= DeltaX);
-    }
+    // 가장 가까운 면 찾기
+    float MinDist = FMath::Min(FMath::Min(DistMinX, DistMaxX), FMath::Min(DistMinY, DistMaxY));
 
     FVector MinVec, MaxVec;
 
-    if (bIsFacingX) 
+    // -------------------------------------------------------------------------
+    // [수정됨] 높이(Z) 설정: 사용자가 그은 곳(Max) ~ 바닥(Min)
+    // -------------------------------------------------------------------------
+    float UserDrawHeight = FMath::Max(PointA.Z, PointB.Z); // 사용자가 그은 선의 높이
+    float BottomZ = MeshBounds.Min.Z - 50.0f;              // 메쉬의 바닥보다 더 아래 (확실히 뚫기 위해)
+
+    // --- X면 (앞/뒤) ---
+    if (MinDist == DistMinX || MinDist == DistMaxX)
     {
-        // [앞면 모드] 두께는 X축 고정, YZ 평면에서 그림
+        // 두께(X): 벽 전체 관통
         MinVec.X = MeshBounds.Min.X - 50.0f; 
         MaxVec.X = MeshBounds.Max.X + 50.0f;
         
-        MinVec.Y = FMath::Min(PointA.Y, PointB.Y);
+        // 너비(Y): 드래그 범위
+        MinVec.Y = FMath::Min(PointA.Y, PointB.Y); 
         MaxVec.Y = FMath::Max(PointA.Y, PointB.Y);
-        MinVec.Z = FMath::Min(PointA.Z, PointB.Z);
-        MaxVec.Z = FMath::Max(PointA.Z, PointB.Z);
+        
+        // [변경] 높이(Z): 그은 곳에서 바닥까지
+        MinVec.Z = BottomZ;
+        MaxVec.Z = UserDrawHeight;
     }
+    // --- Y면 (좌/우) ---
     else 
     {
-        // [옆면 모드] 두께는 Y축 고정, XZ 평면에서 그림
+        // 두께(Y): 벽 전체 관통
         MinVec.Y = MeshBounds.Min.Y - 50.0f; 
         MaxVec.Y = MeshBounds.Max.Y + 50.0f;
 
-        MinVec.X = FMath::Min(PointA.X, PointB.X);
+        // 너비(X): 드래그 범위
+        MinVec.X = FMath::Min(PointA.X, PointB.X); 
         MaxVec.X = FMath::Max(PointA.X, PointB.X);
-        MinVec.Z = FMath::Min(PointA.Z, PointB.Z);
-        MaxVec.Z = FMath::Max(PointA.Z, PointB.Z);
+        
+        // [변경] 높이(Z): 그은 곳에서 바닥까지
+        MinVec.Z = BottomZ;
+        MaxVec.Z = UserDrawHeight;
     }
 
     CurrentPreviewBox = FBox(MinVec, MaxVec);
 
-    // -------------------------------------------------------------------------
-    // [3단계] 유효성 검증
-    // -------------------------------------------------------------------------
-    // 1. Point A(첫 테두리)가 있어야 함.
-    // 2. 현재 Point B도 테두리여야 함.
-    // 3. 둘 사이 거리가 너무 짧으면 안 됨 (점 찍기 방지).
-    bool bEndOnEdge = IsOnBoundary(PointB, 15.0f);
-    bool bDistanceOK = FVector::Dist(PointA, PointB) > 10.0f;
+    // 3. 유효성 검사
+    float DragDistance = FVector::Dist(PointA, PointB);
+    bool bDistanceOK = (DragDistance > 10.0f); 
 
-    if (bHasFirstPoint && bEndOnEdge && bDistanceOK)
+    if (bHasFirstPoint && IsOnBoundary(PointB, 15.0f) && bDistanceOK)
     {
         bIsValidCut = true;
     }
@@ -155,8 +143,8 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
     if (!bIsMarking) return;
 
     FVector FinalLocalPos = GetLocalLocationFromWorld(WorldLocation);
-
-    // [자동 보정] 마지막에 휙 날렸을 때 Snap
+    
+    // 자동 보정 (Snap)
     if (bHasFirstPoint && !IsOnBoundary(FinalLocalPos, 15.0f))
     {
         FVector SnappedPos = SnapToClosestBoundary(FinalLocalPos);
@@ -166,7 +154,9 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
             UDynamicMeshComponent* DynComp = GetOwner()->FindComponentByClass<UDynamicMeshComponent>();
             if (DynComp)
             {
-                UpdateMarking(DynComp->GetComponentTransform().TransformPosition(FinalLocalPos));
+                // 보정된 위치로 업데이트 (이때 바닥까지 내려가는 로직도 자동 적용됨)
+                FVector WorldSnapped = DynComp->GetComponentTransform().TransformPosition(FinalLocalPos);
+                UpdateMarking(WorldSnapped);
             }
         }
     }
@@ -175,7 +165,7 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
         UpdateMarking(WorldLocation);
     }
 
-    // 최종 저장
+    // 저장
     if (bIsValidCut)
     {
         FWeakSpotData NewSpot;
@@ -187,39 +177,38 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
 
         WeakSpots.Add(NewSpot);
 
-        UE_LOG(LogTemp, Display, TEXT("[MiniGame] >> 영역 확정 성공! (ID: %s, HP: %.1f)"), *NewSpot.ID.ToString(), NewSpot.MaxHP);
+        UE_LOG(LogTemp, Display, TEXT("[MiniGame] >> 영역 확정 (바닥까지 포함)! HP: %.1f"), NewSpot.MaxHP);
     }
     else
     {
         if (!bHasFirstPoint)
         {
-            UE_LOG(LogTemp, Warning, TEXT("[MiniGame] >> 취소됨: 테두리를 한 번도 지나가지 않았습니다."));
+            UE_LOG(LogTemp, Warning, TEXT("[MiniGame] 취소: 테두리 미진입"));
         }
         else
-            UE_LOG(LogTemp, Warning, TEXT("[MiniGame] >> 취소됨: 연결이 끊겼거나 너무 짧습니다."));
+            UE_LOG(LogTemp, Warning, TEXT("[MiniGame] 취소: 연결 끊김/짧음"));
     }
 
     bIsMarking = false;
     bHasFirstPoint = false;
 }
 
-// -----------------------------------------------------------------------------
 // [유틸리티]
-// -----------------------------------------------------------------------------
 bool UMDF_MiniGameComponent::IsOnBoundary(FVector LocalLoc, float Tolerance) const
 {
     UDynamicMeshComponent* DynComp = GetOwner() ? GetOwner()->FindComponentByClass<UDynamicMeshComponent>() : nullptr;
     if (!DynComp || !DynComp->GetDynamicMesh()) return false;
 
     FBox Bounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(DynComp->GetDynamicMesh());
+    FVector Scale = DynComp->GetComponentScale();
 
-    // X, Y, Z 모든 면 체크
-    bool bOnX = FMath::IsNearlyEqual(LocalLoc.X, Bounds.Min.X, Tolerance) || 
-                FMath::IsNearlyEqual(LocalLoc.X, Bounds.Max.X, Tolerance);
-    bool bOnY = FMath::IsNearlyEqual(LocalLoc.Y, Bounds.Min.Y, Tolerance) || 
-                FMath::IsNearlyEqual(LocalLoc.Y, Bounds.Max.Y, Tolerance);
-    bool bOnZ = FMath::IsNearlyEqual(LocalLoc.Z, Bounds.Min.Z, Tolerance) || 
-                FMath::IsNearlyEqual(LocalLoc.Z, Bounds.Max.Z, Tolerance);
+    float TolX = Tolerance / FMath::Max(Scale.X, 0.001f);
+    float TolY = Tolerance / FMath::Max(Scale.Y, 0.001f);
+    float TolZ = Tolerance / FMath::Max(Scale.Z, 0.001f);
+
+    bool bOnX = FMath::IsNearlyEqual(LocalLoc.X, Bounds.Min.X, TolX) || FMath::IsNearlyEqual(LocalLoc.X, Bounds.Max.X, TolX);
+    bool bOnY = FMath::IsNearlyEqual(LocalLoc.Y, Bounds.Min.Y, TolY) || FMath::IsNearlyEqual(LocalLoc.Y, Bounds.Max.Y, TolY);
+    bool bOnZ = FMath::IsNearlyEqual(LocalLoc.Z, Bounds.Min.Z, TolZ) || FMath::IsNearlyEqual(LocalLoc.Z, Bounds.Max.Z, TolZ);
 
     return bOnX || bOnY || bOnZ;
 }
@@ -254,27 +243,66 @@ FVector UMDF_MiniGameComponent::SnapToClosestBoundary(FVector LocalLoc) const
 float UMDF_MiniGameComponent::CalculateHPFromBox(const FBox& Box) const
 {
     FVector Size = Box.GetSize();
-    float Volume = Size.X * Size.Y * Size.Z;
-    return 100.0f + (Volume * HPDensityMultiplier * 0.01f);
+    float LocalVolume = Size.X * Size.Y * Size.Z;
+    FVector Scale = GetOwner() ? GetOwner()->GetActorScale3D() : FVector::OneVector;
+    float ScaleFactor = Scale.X * Scale.Y * Scale.Z;
+    
+    // 부피가 커지므로 계수를 조금 낮춰서 밸런스를 맞춤 (0.01 -> 0.005)
+    return 100.0f + (LocalVolume * ScaleFactor * HPDensityMultiplier * 0.005f);
 }
 
 void UMDF_MiniGameComponent::TryBreach(const FHitResult& HitInfo, float DamageAmount)
 {
+    // 1. 서버 권한 체크
     if (GetOwner() && !GetOwner()->HasAuthority()) return;
+
+    // 월드 좌표 -> 로컬 좌표 변환
     FVector LocalHit = GetLocalLocationFromWorld(HitInfo.Location);
 
+    // [디버그] 현재 맞은 로컬 좌표 확인
+    UE_LOG(LogTemp, Warning, TEXT("--- [TryBreach] 타격 시도 ---"));
+    UE_LOG(LogTemp, Warning, TEXT("   > 로컬 타격 위치: %s"), *LocalHit.ToString());
+
+    bool bHitAny = false;
+
+    // 2. 저장된 약점들을 순회
     for (int32 i = 0; i < WeakSpots.Num(); ++i)
     {
         if (WeakSpots[i].bIsBroken) continue;
-        
-        // Tolerance 약간 줘서 판정
-        if (WeakSpots[i].LocalBox.IsInside(LocalHit.GridSnap(1.0f)))
+
+        // [디버그] 박스 범위 찍어보기
+        /*
+        UE_LOG(LogTemp, Log, TEXT("   > 약점[%d] 범위: Min %s ~ Max %s"), 
+            i, *WeakSpots[i].LocalBox.Min.ToString(), *WeakSpots[i].LocalBox.Max.ToString());
+        */
+
+        // [수정] 박스를 약간 키워서(Expand) 검사 (관용도 5cm)
+        // 표면에 맞았을 때 오차로 인해 안 맞았다고 뜨는 것을 방지함
+        if (WeakSpots[i].LocalBox.ExpandBy(5.0f).IsInside(LocalHit))
         {
+            // 3. HP 차감
             WeakSpots[i].CurrentHP -= DamageAmount;
-            UE_LOG(LogTemp, Log, TEXT("약점 타격! HP: %.1f"), WeakSpots[i].CurrentHP);
-            if (WeakSpots[i].CurrentHP <= 0.0f) ExecuteDestruction(i);
+            bHitAny = true;
+
+            UE_LOG(LogTemp, Display, TEXT("   >>> [HIT!] 약점 명중! (Index: %d)"), i);
+            UE_LOG(LogTemp, Display, TEXT("       남은 HP: %.1f / %.1f (데미지: %.1f)"), 
+                WeakSpots[i].CurrentHP, WeakSpots[i].MaxHP, DamageAmount);
+
+            // 4. 파괴 조건
+            if (WeakSpots[i].CurrentHP <= 0.0f)
+            {
+                UE_LOG(LogTemp, Error, TEXT("   >>> [DESTROY] 파괴 조건 달성! 메쉬 절단 시작!"));
+                ExecuteDestruction(i);
+            }
+            
+            // 한 발에 여러 박스가 겹쳐있으면 다 데미지를 줄지, 하나만 줄지 결정 (일단 return해서 하나만)
             return; 
         }
+    }
+
+    if (!bHitAny)
+    {
+        UE_LOG(LogTemp, Warning, TEXT("   > 실패: 범위 안에 들어오지 않음 (오차범위 5.0f 적용됨)"));
     }
 }
 
@@ -287,14 +315,17 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
     if (!DynComp) return;
     UDynamicMesh* TargetMesh = DynComp->GetDynamicMesh();
 
+    // 임시 메쉬 생성
     UDynamicMesh* ToolMesh = NewObject<UDynamicMesh>(this); 
     FBox CutBox = WeakSpots[WeakSpotIndex].LocalBox;
     FVector Center = CutBox.GetCenter();
-    FVector Extent = CutBox.GetExtent() * 1.05f; 
+    FVector Extent = CutBox.GetExtent() * 1.05f; // 약간 더 크게
 
+    // Boolean Subtract
     UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(ToolMesh, FGeometryScriptPrimitiveOptions(), FTransform(Center), Extent.X * 2.f, Extent.Y * 2.f, Extent.Z * 2.f);
     UGeometryScriptLibrary_MeshBooleanFunctions::ApplyMeshBoolean(TargetMesh, FTransform::Identity, ToolMesh, FTransform::Identity, EGeometryScriptBooleanOperation::Subtract, FGeometryScriptMeshBooleanOptions());
     
+    // 업데이트
     UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(TargetMesh, FGeometryScriptCalculateNormalsOptions());
     DynComp->UpdateCollision();
     DynComp->NotifyMeshUpdated();
@@ -308,6 +339,7 @@ void UMDF_MiniGameComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     if (!DynComp) return;
 
     FTransform CompTrans = DynComp->GetComponentTransform();
+    FVector WorldScale = CompTrans.GetScale3D();
     
     // 마감 처리용 벽 크기
     FBox WallBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(DynComp->GetDynamicMesh());
@@ -317,14 +349,16 @@ void UMDF_MiniGameComponent::TickComponent(float DeltaTime, ELevelTick TickType,
     {
         if (Spot.bIsBroken) continue;
         FBox VisualBox = Spot.LocalBox.Overlap(WallBounds).ExpandBy(0.5f);
-        DrawDebugBox(GetWorld(), CompTrans.TransformPosition(VisualBox.GetCenter()), VisualBox.GetExtent(), CompTrans.GetRotation(), FColor::Cyan, false, -1.0f, 0, 1.5f);
+        FVector ScaledExtent = VisualBox.GetExtent() * WorldScale;
+        DrawDebugBox(GetWorld(), CompTrans.TransformPosition(VisualBox.GetCenter()), ScaledExtent, CompTrans.GetRotation(), FColor::Cyan, false, -1.0f, 0, 1.5f);
     }
 
-    // 2. 드래그 중 박스 (Green/Red)
+    // 2. 드래그 중 (Green/Red)
     if (bIsMarking)
     {
         FColor DrawColor = bIsValidCut ? FColor::Green : FColor::Red;
         FBox VisualPreview = CurrentPreviewBox.Overlap(WallBounds).ExpandBy(0.5f);
-        DrawDebugBox(GetWorld(), CompTrans.TransformPosition(VisualPreview.GetCenter()), VisualPreview.GetExtent(), CompTrans.GetRotation(), DrawColor, false, -1.0f, 0, 3.0f);
+        FVector ScaledExtent = VisualPreview.GetExtent() * WorldScale;
+        DrawDebugBox(GetWorld(), CompTrans.TransformPosition(VisualPreview.GetCenter()), ScaledExtent, CompTrans.GetRotation(), DrawColor, false, -1.0f, 0, 3.0f);
     }
 }

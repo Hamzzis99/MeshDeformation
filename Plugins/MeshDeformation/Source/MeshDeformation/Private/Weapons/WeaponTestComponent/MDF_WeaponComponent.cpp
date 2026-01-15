@@ -1,89 +1,83 @@
 ﻿// Gihyeon's MeshDeformation Project
+// File: Source/MeshDeformation/Weapons/WeaponTestComponent/MDF_WeaponComponent.cpp
 
-#include "Weapons/WeaponTestComponent/MDF_WeaponComponent.h"
+#include "Weapons/WeaponTestComponent/MDF_WeaponComponent.h" // 경로 확인하세요
 #include "Weapons/MDF_BaseWeapon.h"
 #include "GameFramework/Character.h"
 #include "Engine/World.h"
 
 UMDF_WeaponComponent::UMDF_WeaponComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
-	WeaponAttachSocketName = TEXT("WeaponSocket"); // 기본값
+    PrimaryComponentTick.bCanEverTick = false;
+    WeaponAttachSocketName = FName("WeaponSocket"); // 기본값
 }
 
 void UMDF_WeaponComponent::BeginPlay()
 {
-	Super::BeginPlay();
-
-	// [선택 사항] 게임 시작 시 자동으로 1번 무기(0번 인덱스) 장착
-	// EquipWeaponByIndex(0);
+    Super::BeginPlay();
 }
 
 void UMDF_WeaponComponent::EquipWeaponByIndex(int32 SlotIndex)
 {
-	// 1. 인덱스 유효성 검사
-	if (!WeaponSlots.IsValidIndex(SlotIndex))
-	{
-		UE_LOG(LogTemp, Warning, TEXT("[WeaponComp] 잘못된 슬롯 번호입니다: %d"), SlotIndex);
-		return;
-	}
+    // 유효성 검사
+    if (!WeaponSlots.IsValidIndex(SlotIndex))
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[WeaponComp] 유효하지 않은 슬롯 인덱스: %d"), SlotIndex);
+        return;
+    }
 
-	TSubclassOf<AMDF_BaseWeapon> TargetWeaponClass = WeaponSlots[SlotIndex];
-	if (!TargetWeaponClass) return;
+    // 이미 같은 무기를 들고 있다면 패스
+    if (CurrentWeaponActor && CurrentWeaponIndex == SlotIndex) return;
 
-	// 2. 주인(Owner) 확인 - 무기는 캐릭터 손에 붙어야 하니까요
-	ACharacter* OwnerCharacter = Cast<ACharacter>(GetOwner());
-	if (!OwnerCharacter) return;
+    // 1. 기존 무기 제거 (UnEquip)
+    UnEquipWeapon();
 
-	// 3. 기존 무기 제거 (교체 로직)
-	if (CurrentWeaponActor)
-	{
-		// 쏘고 있었다면 멈추고
-		CurrentWeaponActor->StopFire();
-		// 파괴
-		CurrentWeaponActor->Destroy();
-		CurrentWeaponActor = nullptr;
-	}
+    // 2. 새 무기 스폰
+    if (WeaponSlots[SlotIndex])
+    {
+        FActorSpawnParameters SpawnParams;
+        SpawnParams.Owner = GetOwner(); // 무기의 주인은 캐릭터
+        SpawnParams.Instigator = Cast<APawn>(GetOwner());
 
-	// 4. 새 무기 스폰 (서버 권한 체크는 캐릭터에서 하거나 여기서 추가 가능)
-	FActorSpawnParameters SpawnParams;
-	SpawnParams.Owner = OwnerCharacter;
-	SpawnParams.Instigator = OwnerCharacter;
-
-	AMDF_BaseWeapon* NewWeapon = GetWorld()->SpawnActor<AMDF_BaseWeapon>(TargetWeaponClass, OwnerCharacter->GetActorLocation(), OwnerCharacter->GetActorRotation(), SpawnParams);
-
-	if (NewWeapon)
-	{
-		NewWeapon->AttachToComponent(OwnerCharacter->GetMesh(), FAttachmentTransformRules::SnapToTargetIncludingScale, WeaponAttachSocketName);
+        CurrentWeaponActor = GetWorld()->SpawnActor<AMDF_BaseWeapon>(WeaponSlots[SlotIndex], GetOwner()->GetActorTransform(), SpawnParams);
         
-		CurrentWeaponActor = NewWeapon;
-		
-		FString WeaponName = NewWeapon->GetName();
-        
-		// 화면 상단 출력 (Cyan 색상)
-		if (GEngine)
-		{
-			FString Msg = FString::Printf(TEXT("무기 교체 성공: %s (슬롯: %d)"), *WeaponName, SlotIndex);
-			GEngine->AddOnScreenDebugMessage(-1, 3.0f, FColor::Cyan, Msg);
-		}
+        if (CurrentWeaponActor)
+        {
+            // 캐릭터 손에 부착
+            ACharacter* Char = Cast<ACharacter>(GetOwner());
+            if (Char)
+            {
+                CurrentWeaponActor->AttachToComponent(Char->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, WeaponAttachSocketName);
+            }
+            
+            CurrentWeaponIndex = SlotIndex; // 인덱스 갱신
+            UE_LOG(LogTemp, Log, TEXT("[WeaponComp] 무기 장착 완료: %s (Slot: %d)"), *CurrentWeaponActor->GetName(), SlotIndex);
+        }
+    }
+}
 
-		// 로그 출력
-		UE_LOG(LogTemp, Log, TEXT("[WeaponSystem] %s(으)로 무기가 변경되었습니다."), *WeaponName);
-	}
+void UMDF_WeaponComponent::UnEquipWeapon()
+{
+    if (CurrentWeaponActor)
+    {
+        CurrentWeaponActor->Destroy();
+        CurrentWeaponActor = nullptr;
+    }
+    CurrentWeaponIndex = -1; // -1은 '무기 없음' 상태
 }
 
 void UMDF_WeaponComponent::StartFire()
 {
-	if (CurrentWeaponActor)
-	{
-		CurrentWeaponActor->StartFire();
-	}
+    if (CurrentWeaponActor)
+    {
+        CurrentWeaponActor->StartFire();
+    }
 }
 
 void UMDF_WeaponComponent::StopFire()
 {
-	if (CurrentWeaponActor)
-	{
-		CurrentWeaponActor->StopFire();
-	}
+    if (CurrentWeaponActor)
+    {
+        CurrentWeaponActor->StopFire();
+    }
 }

@@ -1,4 +1,5 @@
 // Gihyeon's MeshDeformation Project
+// File: Source/MeshDeformation/InventoryProjectCharacter.h
 
 #pragma once
 
@@ -6,12 +7,12 @@
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
 #include "InputActionValue.h"
-#include "Weapons/WeaponTestComponent/MDF_WeaponComponent.h"
 #include "InventoryProjectCharacter.generated.h"
 
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
+class UMDF_WeaponComponent;
 
 UCLASS(abstract)
 class AInventoryProjectCharacter : public ACharacter
@@ -23,6 +24,9 @@ class AInventoryProjectCharacter : public ACharacter
 
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (AllowPrivateAccess = "true"))
     UCameraComponent* FollowCamera;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Components", meta = (AllowPrivateAccess = "true"))
+    class UMDF_WeaponComponent* WeaponComponent;
     
 protected:
     UPROPERTY(EditAnywhere, Category="Input")
@@ -34,21 +38,17 @@ protected:
     UPROPERTY(EditAnywhere, Category="Input")
     UInputAction* MouseLookAction;
 
-    /** 사격 입력 액션 (IA_Fire) */
     UPROPERTY(EditAnywhere, Category="Input")
     UInputAction* FireAction;
 
-    // [New] 무기 슬롯 교체 입력 (IA가 있다면 연결, 없다면 레거시 바인딩 사용)
-    // 1번키, 2번키
     UPROPERTY(EditAnywhere, Category="Input")
-    UInputAction* EquipSlot1Action;
+    UInputAction* EquipSlot1Action; 
 
     UPROPERTY(EditAnywhere, Category="Input")
     UInputAction* EquipSlot2Action;
 
-    // [Step 3 핵심] 무기 관리를 담당하는 컴포넌트
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (DisplayName = "무기 관리 컴포넌트"))
-    TObjectPtr<UMDF_WeaponComponent> WeaponComponent;
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="Combat")
+    TSubclassOf<class AInventoryProjectProjectile> ProjectileClass;
 
 public:
     AInventoryProjectCharacter();  
@@ -59,26 +59,29 @@ protected:
     void Move(const FInputActionValue& Value);
     void Look(const FInputActionValue& Value);
 
-    // [사격] 컴포넌트로 전달
+    /** 클라이언트 입력 함수 */
     void OnFireStart(const FInputActionValue& Value);
     void OnFireStop(const FInputActionValue& Value);
-
-    // [교체] 1번, 2번 키 입력 처리
     void OnEquipSlot1();
     void OnEquipSlot2();
 
-    // [서버 RPC]
+    // -------------------------------------------------------------------------
+    // 서버 RPC (모든 실질적 로직은 서버에서 실행)
+    // -------------------------------------------------------------------------
+    
+    /** [핵심] 사격 시작 요청 - 서버가 무기 유무를 판단함 */
     UFUNCTION(Server, Reliable)
-    void Server_StartFire();
+    void Server_HandleFireStart();
 
+    /** 사격 중지 요청 */
     UFUNCTION(Server, Reliable)
-    void Server_StopFire();
+    void Server_HandleFireStop();
 
+    /** 무기 교체 요청 */
     UFUNCTION(Server, Reliable)
-    void Server_EquipSlot(int32 SlotIndex);
+    void Server_ToggleWeaponSlot(int32 SlotIndex);
 
 public:
-    // 기존 조작 함수 유지
     UFUNCTION(BlueprintCallable, Category="Input")
     virtual void DoMove(float Right, float Forward);
     UFUNCTION(BlueprintCallable, Category="Input")
