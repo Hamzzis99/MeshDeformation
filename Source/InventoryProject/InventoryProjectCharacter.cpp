@@ -1,5 +1,7 @@
+// Gihyeon's MeshDeformation Project
+
 #include "InventoryProjectCharacter.h"
-#include "InventoryProjectProjectile.h" // 이건 필요 없을 수도 있으나 일단 유지
+#include "InventoryProjectProjectile.h" // 유지
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -7,7 +9,7 @@
 #include "EnhancedInputComponent.h"
 #include "Engine/World.h"
 
-// [New] 무기 헤더 포함 필수
+// [New] 무기 베이스 헤더 포함
 #include "Weapons/MDF_BaseWeapon.h"
 
 AInventoryProjectCharacter::AInventoryProjectCharacter()
@@ -20,6 +22,9 @@ AInventoryProjectCharacter::AInventoryProjectCharacter()
 
     FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
     FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+
+    // [Step 3] 무기 컴포넌트 생성
+    WeaponComponent = CreateDefaultSubobject<UMDF_WeaponComponent>(TEXT("WeaponComponent"));
 }
 
 void AInventoryProjectCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -31,83 +36,85 @@ void AInventoryProjectCharacter::SetupPlayerInputComponent(UInputComponent* Play
        EIC->BindAction(LookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
        EIC->BindAction(MouseLookAction, ETriggerEvent::Triggered, this, &AInventoryProjectCharacter::Look);
        
-       // [수정] 사격 입력: 누름(Started)과 뗌(Completed)을 분리
+       // 사격 입력
        if (FireAction) {
           EIC->BindAction(FireAction, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnFireStart);
           EIC->BindAction(FireAction, ETriggerEvent::Completed, this, &AInventoryProjectCharacter::OnFireStop);
        }
+
+       // [무기 교체 입력]
+       // 만약 Enhanced Input에 Slot1, Slot2 액션을 아직 안 만드셨다면
+       // 프로젝트 세팅 -> 입력 -> Action Mapping에서 "Slot1", "Slot2"를 추가하고
+       // 아래처럼 레거시 바인딩을 쓰셔도 됩니다. (둘 다 안전하게 넣어둠)
+       
+       // 1. Enhanced Input 방식 (변수가 할당되어 있다면)
+       if (EquipSlot1Action) EIC->BindAction(EquipSlot1Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot1);
+       if (EquipSlot2Action) EIC->BindAction(EquipSlot2Action, ETriggerEvent::Started, this, &AInventoryProjectCharacter::OnEquipSlot2);
+    }
+    else
+    {
+        // 2. Legacy Input 방식 (백업)
+        PlayerInputComponent->BindAction("Slot1", IE_Pressed, this, &AInventoryProjectCharacter::OnEquipSlot1);
+        PlayerInputComponent->BindAction("Slot2", IE_Pressed, this, &AInventoryProjectCharacter::OnEquipSlot2);
     }
 }
 
 // -----------------------------------------------------------------------------
-// [New] 무기 장착 시스템
+// [New] 무기 교체 로직 (1번, 2번 키)
 // -----------------------------------------------------------------------------
-void AInventoryProjectCharacter::EquipWeapon(TSubclassOf<AMDF_BaseWeapon> NewWeaponClass)
+
+void AInventoryProjectCharacter::OnEquipSlot1()
 {
-    // 서버에서만 실행 (멀티플레이 안전성)
-    if (!HasAuthority()) return;
+    // 로컬에서 누르면 서버로 요청
+    Server_EquipSlot(0); // 0번 인덱스 (리더 무기 예상)
+}
 
-    // 기존 무기 제거
-    if (CurrentWeapon)
+void AInventoryProjectCharacter::OnEquipSlot2()
+{
+    // 로컬에서 누르면 서버로 요청
+    Server_EquipSlot(1); // 1번 인덱스 (슈터 무기 예상)
+}
+
+void AInventoryProjectCharacter::Server_EquipSlot_Implementation(int32 SlotIndex)
+{
+    if (WeaponComponent)
     {
-        CurrentWeapon->Destroy();
-        CurrentWeapon = nullptr;
-    }
-
-    if (!NewWeaponClass) return;
-
-    // 새 무기 스폰
-    FActorSpawnParameters Params;
-    Params.Owner = this;
-    Params.Instigator = this;
-    
-    AMDF_BaseWeapon* NewWeapon = GetWorld()->SpawnActor<AMDF_BaseWeapon>(NewWeaponClass, GetActorLocation(), GetActorRotation(), Params);
-
-    if (NewWeapon)
-    {
-        // 소켓 이름은 스켈레탈 메시에서 만든 이름과 일치해야 함 ("WeaponSocket")
-        NewWeapon->AttachToComponent(GetMesh(), FAttachmentTransformRules::SnapToTargetIncludingScale, TEXT("WeaponSocket"));
-        CurrentWeapon = NewWeapon;
-
-        UE_LOG(LogTemp, Log, TEXT("[Character] Equipped Weapon: %s"), *NewWeapon->GetName());
+        WeaponComponent->EquipWeaponByIndex(SlotIndex);
     }
 }
 
 // -----------------------------------------------------------------------------
-// [New] 사격 입력 처리 (Client -> Server -> Weapon)
+// [New] 사격 입력 처리
 // -----------------------------------------------------------------------------
 
 void AInventoryProjectCharacter::OnFireStart(const FInputActionValue& Value)
 {
-    // 로컬 즉시 반응 (선택 사항: 애니메이션 등)
-    // 서버로 요청
     Server_StartFire();
 }
 
 void AInventoryProjectCharacter::OnFireStop(const FInputActionValue& Value)
 {
-    // 서버로 요청
     Server_StopFire();
 }
 
 void AInventoryProjectCharacter::Server_StartFire_Implementation()
 {
-    if (CurrentWeapon)
+    if (WeaponComponent)
     {
-        CurrentWeapon->StartFire(); // 무기에게 "쏴!" 명령
+        WeaponComponent->StartFire();
     }
 }
 
 void AInventoryProjectCharacter::Server_StopFire_Implementation()
 {
-    if (CurrentWeapon)
+    if (WeaponComponent)
     {
-        CurrentWeapon->StopFire(); // 무기에게 "멈춰!" 명령
+        WeaponComponent->StopFire();
     }
 }
 
 // -----------------------------------------------------------------------------
-// 기존 이동/시선 처리 (유지)
+// 기존 이동/시선 처리
 // -----------------------------------------------------------------------------
 void AInventoryProjectCharacter::Move(const FInputActionValue& V) { FVector2D Vec = V.Get<FVector2D>(); DoMove(Vec.X, Vec.Y); }
 void AInventoryProjectCharacter::Look(const FInputActionValue& V) { FVector2D Vec = V.Get<FVector2D>(); DoLook(Vec.X, Vec.Y); }

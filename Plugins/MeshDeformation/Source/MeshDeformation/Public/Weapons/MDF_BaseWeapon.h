@@ -1,4 +1,5 @@
-﻿// File: Source/MeshDeformation/Weapon/MDF_BaseWeapon.h
+﻿// Gihyeon's MeshDeformation Project
+
 #pragma once
 
 #include "CoreMinimal.h"

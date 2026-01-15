@@ -1,15 +1,17 @@
+// Gihyeon's MeshDeformation Project
+
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
 #include "Logging/LogMacros.h"
 #include "InputActionValue.h"
+#include "Weapons/WeaponTestComponent/MDF_WeaponComponent.h"
 #include "InventoryProjectCharacter.generated.h"
 
 class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
-class AMDF_BaseWeapon; // [New] 무기 클래스 전방 선언
 
 UCLASS(abstract)
 class AInventoryProjectCharacter : public ACharacter
@@ -36,19 +38,20 @@ protected:
     UPROPERTY(EditAnywhere, Category="Input")
     UInputAction* FireAction;
 
-    // [삭제됨] 하드코딩된 투사체 클래스는 이제 필요 없습니다.
-    // TSubclassOf<class AInventoryProjectProjectile> ProjectileClass;
+    // [New] 무기 슬롯 교체 입력 (IA가 있다면 연결, 없다면 레거시 바인딩 사용)
+    // 1번키, 2번키
+    UPROPERTY(EditAnywhere, Category="Input")
+    UInputAction* EquipSlot1Action;
 
-    // [New] 현재 장착 중인 무기 액터
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Combat", meta = (DisplayName = "현재 무기 (Current Weapon)"))
-    TObjectPtr<AMDF_BaseWeapon> CurrentWeapon;
+    UPROPERTY(EditAnywhere, Category="Input")
+    UInputAction* EquipSlot2Action;
+
+    // [Step 3 핵심] 무기 관리를 담당하는 컴포넌트
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Components", meta = (DisplayName = "무기 관리 컴포넌트"))
+    TObjectPtr<UMDF_WeaponComponent> WeaponComponent;
 
 public:
     AInventoryProjectCharacter();  
-
-    // [New] 외부(GameMode)에서 무기를 쥐어줄 때 사용하는 함수
-    UFUNCTION(BlueprintCallable, Category="Combat", meta = (DisplayName = "무기 장착 (Equip Weapon)"))
-    void EquipWeapon(TSubclassOf<AMDF_BaseWeapon> NewWeaponClass);
 
 protected:
     virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -56,19 +59,23 @@ protected:
     void Move(const FInputActionValue& Value);
     void Look(const FInputActionValue& Value);
 
-    // [New] 사격 로직 분리 (누름/뗌)
+    // [사격] 컴포넌트로 전달
     void OnFireStart(const FInputActionValue& Value);
     void OnFireStop(const FInputActionValue& Value);
 
-    // [New] 서버 RPC (무기 사용 요청)
+    // [교체] 1번, 2번 키 입력 처리
+    void OnEquipSlot1();
+    void OnEquipSlot2();
+
+    // [서버 RPC]
     UFUNCTION(Server, Reliable)
     void Server_StartFire();
 
     UFUNCTION(Server, Reliable)
     void Server_StopFire();
 
-    // [삭제됨] 예전 발사 RPC
-    // void Server_Fire(FVector Location, FRotator Rotation);
+    UFUNCTION(Server, Reliable)
+    void Server_EquipSlot(int32 SlotIndex);
 
 public:
     // 기존 조작 함수 유지
