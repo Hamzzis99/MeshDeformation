@@ -327,11 +327,17 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
     // 3. 탄젠트(Tangent) 재계산 (UV가 생겼으므로 정상 작동)
     UGeometryScriptLibrary_MeshNormalsFunctions::ComputeTangents(TargetMesh, FGeometryScriptTangentsOptions());
     
-    // 4. 업데이트
-    DynComp->UpdateCollision(true); 
-    DynComp->NotifyMeshUpdated();
+    // -------------------------------------------------------------------------
+    // [★컬링/증발 해결] 렌더링 상태 및 바운드 강제 업데이트
+    // -------------------------------------------------------------------------
+    
+    // 4. 업데이트 및 상태 통보
+    DynComp->MarkRenderTransformDirty(); // 렌더 스레드에 트랜스폼 변화 알림
+    DynComp->NotifyMeshUpdated();        // 메쉬 데이터 변경에 따른 바운드 재계산 트리거
+    DynComp->UpdateCollision(true);      // 물리 충돌 갱신
+    DynComp->MarkRenderStateDirty();     // 렌더링 프록시 리셋 (컬링 문제의 핵심 해결책)
 
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] 정밀 절단 완료 (UV+Tangent) (Index: %d)"), WeakSpotIndex);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF] 정밀 절단 완료 (UV+Tangent+Bounds) (Index: %d)"), WeakSpotIndex);
 }
 
 // -----------------------------------------------------------------------------

@@ -9,14 +9,14 @@
 
 /**
  * [Step 4] 약점 데이터 구조체
- * - 리더가 설계하고 슈터가 파괴할 영역 정보
+ * - 네트워크 복제를 위해 bIsBroken 상태를 감시함
  */
 USTRUCT(BlueprintType)
 struct FWeakSpotData
 {
     GENERATED_BODY()
 
-    UPROPERTY(BlueprintReadOnly)
+    UPROPERTY(BlueprintReadOnly, meta = (IgnoreForMemberInitializationTest))
     FGuid ID;
 
     UPROPERTY(BlueprintReadOnly)
@@ -28,6 +28,7 @@ struct FWeakSpotData
     UPROPERTY(BlueprintReadOnly)
     float MaxHP;
 
+    // [네트워크] 이 값이 서버에서 바뀌면 클라이언트의 OnRep 함수가 트리거됨
     UPROPERTY(BlueprintReadOnly)
     bool bIsBroken = false;
 
@@ -37,8 +38,7 @@ struct FWeakSpotData
 
 /**
  * [MDF_MiniGameComponent]
- * - 리더의 절단 설계(Marking)와 슈터의 파괴(Breach)를 담당하는 핵심 컴포넌트
- * - 부모 클래스(Deformable)의 변형 로직을 제어하는 문지기 역할을 수행함
+ * - 데디케이티드 서버 환경을 지원하도록 복제 로직이 추가됨
  */
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class MESHDEFORMATION_API UMDF_MiniGameComponent : public UMDF_DeformableComponent
@@ -48,12 +48,12 @@ class MESHDEFORMATION_API UMDF_MiniGameComponent : public UMDF_DeformableCompone
 public:
     UMDF_MiniGameComponent();
 
+    // [네트워크] 변수 복제 규칙을 정의하는 필수 함수
+    virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
 
 public:
-    // -------------------------------------------------------------------------
-    // [Step 1~3] 리더(Leader) 기능: 설계(Marking)
-    // -------------------------------------------------------------------------
     UFUNCTION(BlueprintCallable, Category = "MDF|MiniGame")
     void StartMarking(FVector WorldLocation);
 
@@ -63,20 +63,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "MDF|MiniGame")
     void EndMarking(FVector WorldLocation);
 
-    // -------------------------------------------------------------------------
-    // [Step 4~5] 슈터(Shooter) 기능: 파괴(Breach)
-    // -------------------------------------------------------------------------
-
-    /** * 약점 타격 시도 (문지기에게 보고서 제출)
-     * @return true면 약점 명중, false면 빗나감
-     */
     UFUNCTION(BlueprintCallable, Category = "MDF|MiniGame")
     bool TryBreach(const FHitResult& HitInfo, float DamageAmount);
 
 protected:
-    // -------------------------------------------------------------------------
-    // [Step 5 핵심] 부모의 데미지 처리 함수 가로채기 (Gatekeeper)
-    // -------------------------------------------------------------------------
     virtual void HandlePointDamage(AActor* DamagedActor, float Damage, class AController* InstigatedBy, FVector HitLocation, class UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const class UDamageType* DamageType, AActor* DamageCauser) override;
 
 protected:
@@ -85,10 +75,18 @@ protected:
     float CalculateHPFromBox(const FBox& Box) const;
     FVector SnapToClosestBoundary(FVector LocalLoc) const;
     FVector GetLocalLocationFromWorld(FVector WorldLoc) const;
+    
+    // [네트워크] 서버 권한으로 파괴를 확정하는 함수
     void ExecuteDestruction(int32 WeakSpotIndex);
 
+    // [네트워크] 실제 메쉬를 깎는 "시각적 연산"만 담당 (서버/클라 공통 실행)
+    void ApplyVisualMeshCut(int32 Index);
+
+    // [네트워크] 서버에서 데이터가 넘어왔을 때 클라이언트에서 실행될 함수
+    UFUNCTION()
+    void OnRep_WeakSpots();
+
 protected:
-    // [마킹 상태 변수]
     bool bIsMarking = false;     
     bool bIsValidCut = false;    
     bool bHasFirstPoint = false; 
@@ -97,11 +95,13 @@ protected:
     FVector LocalFirstBoundaryPoint;  
     FBox CurrentPreviewBox;           
 
-    // [데이터 저장소]
-    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "MDF|MiniGame", meta = (DisplayName = "약점 데이터 목록"))
+    // [네트워크] ReplicatedUsing을 통해 상태 변화를 감시함
+    UPROPERTY(ReplicatedUsing = OnRep_WeakSpots, VisibleAnywhere, BlueprintReadOnly, Category = "MDF|MiniGame")
     TArray<FWeakSpotData> WeakSpots;
 
-    // [설정]
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "HP 밀도 계수 (내구도)"))
+    // [네트워크] 클라이언트가 이미 깎은 인덱스를 추적하여 중복 연산 방지
+    TArray<int32> LocallyProcessedIndices;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config")
     float HPDensityMultiplier = 0.1f; 
 };
