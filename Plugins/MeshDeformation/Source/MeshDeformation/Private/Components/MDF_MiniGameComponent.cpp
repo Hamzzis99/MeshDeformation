@@ -7,21 +7,57 @@
 #include "DrawDebugHelpers.h"
 #include "TimerManager.h" 
 
+// [★네트워크 필수] 서버-클라이언트 간 변수 복제를 위한 헤더
+#include "Net/UnrealNetwork.h" 
+
 // [Geometry Script 헤더]
 #include "GeometryScript/MeshQueryFunctions.h" 
 #include "GeometryScript/MeshBooleanFunctions.h"
 #include "GeometryScript/MeshPrimitiveFunctions.h"
 #include "GeometryScript/MeshNormalsFunctions.h"
-
-// [★필수 추가 1] UV 생성 함수를 사용하기 위해 이 헤더가 꼭 필요합니다.
 #include "GeometryScript/MeshUVFunctions.h"
-// [★필수 추가 2] 구조체 에러 방지용 (탄젠트/UV 옵션 등)
 #include "GeometryScript/GeometryScriptTypes.h" 
 
 UMDF_MiniGameComponent::UMDF_MiniGameComponent()
 {
     // 미니게임 로직(드로잉 시각화)을 위해 Tick을 켭니다.
     PrimaryComponentTick.bCanEverTick = true; 
+
+    // -------------------------------------------------------------------------
+    // [네트워크 설정] 컴포넌트 복제 활성화
+    // - 이 컴포넌트가 서버의 데이터를 클라이언트로 보낼 수 있도록 허용합니다.
+    // -------------------------------------------------------------------------
+    SetIsReplicatedByDefault(true);
+}
+
+// -----------------------------------------------------------------------------
+// [네트워크 핵심] 변수 복제 규칙 정의
+// - 서버에서 'WeakSpots' 배열이 변하면 클라이언트로 전파하도록 등록합니다.
+// -----------------------------------------------------------------------------
+void UMDF_MiniGameComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+    Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+    // WeakSpots 배열을 복제 대상으로 등록 (bIsBroken 상태 변화를 감지함)
+    DOREPLIFETIME(UMDF_MiniGameComponent, WeakSpots);
+}
+
+// -----------------------------------------------------------------------------
+// [네트워크] OnRep_WeakSpots (클라이언트 전용 실행)
+// - 서버로부터 복제된 데이터를 받았을 때 클라이언트 쪽에서 자동으로 호출됩니다.
+// - "서버가 어딘가를 부쉈다"는 소식을 들으면 각 클라이언트가 자기 화면의 메쉬를 깎습니다.
+// -----------------------------------------------------------------------------
+void UMDF_MiniGameComponent::OnRep_WeakSpots()
+{
+    // 배열을 순회하며 서버에서 파괴되었다고(bIsBroken=true) 표시된 항목을 찾습니다.
+    for (int32 i = 0; i < WeakSpots.Num(); ++i)
+    {
+        // 서버는 부서졌다는데, 내 화면(클라)에서는 아직 안 부서졌다면 절단 실행
+        if (WeakSpots[i].bIsBroken && !LocallyProcessedIndices.Contains(i))
+        {
+            ApplyVisualMeshCut(i);
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -31,6 +67,7 @@ UMDF_MiniGameComponent::UMDF_MiniGameComponent()
 void UMDF_MiniGameComponent::HandlePointDamage(AActor* DamagedActor, float Damage, class AController* InstigatedBy, FVector HitLocation, class UPrimitiveComponent* FHitComponent, FName BoneName, FVector ShotFromDirection, const class UDamageType* DamageType, AActor* DamageCauser)
 {
     // 1. 서버 권한 및 유효성 검사
+    // [★네트워크 보안] 데미지 판정과 HP 차감은 반드시 '서버'에서만 처리해야 조작을 막을 수 있습니다.
     if (!GetOwner() || !GetOwner()->HasAuthority()) return;
 
     // 2. 약점 명중 여부 확인 (TryBreach 내부에서 HP 차감 및 파괴 판정 수행)
@@ -210,16 +247,19 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
     // 최종 유효성 확인 후 데이터 저장
     if (bIsValidCut)
     {
-        FWeakSpotData NewSpot;
-        NewSpot.ID = FGuid::NewGuid();
-        NewSpot.LocalBox = CurrentPreviewBox;
-        NewSpot.MaxHP = CalculateHPFromBox(CurrentPreviewBox); // 크기에 비례한 체력 설정
-        NewSpot.CurrentHP = NewSpot.MaxHP;
-        NewSpot.bIsBroken = false;
-        
-        WeakSpots.Add(NewSpot);
-
-        UE_LOG(LogTemp, Display, TEXT("[MiniGame] >> 영역 확정 (바닥까지 포함)! HP: %.1f"), NewSpot.MaxHP);
+        // [★네트워크] 약점 생성도 서버 권한이 있을 때만 배열에 추가하도록 보호합니다.
+        if (GetOwner()->HasAuthority())
+        {
+            FWeakSpotData NewSpot;
+            NewSpot.ID = FGuid::NewGuid();
+            NewSpot.LocalBox = CurrentPreviewBox;
+            NewSpot.MaxHP = CalculateHPFromBox(CurrentPreviewBox); // 크기에 비례한 체력 설정
+            NewSpot.CurrentHP = NewSpot.MaxHP;
+            NewSpot.bIsBroken = false;
+            
+            WeakSpots.Add(NewSpot);
+            UE_LOG(LogTemp, Display, TEXT("[MiniGame] >> 영역 확정! HP: %.1f"), NewSpot.MaxHP);
+        }
     }
     else
     {
@@ -237,6 +277,7 @@ void UMDF_MiniGameComponent::EndMarking(FVector WorldLocation)
 // -----------------------------------------------------------------------------
 bool UMDF_MiniGameComponent::TryBreach(const FHitResult& HitInfo, float DamageAmount)
 {
+    // [★네트워크] 서버만 파괴 판정을 내립니다.
     if (GetOwner() && !GetOwner()->HasAuthority()) return false;
     FVector LocalHit = GetLocalLocationFromWorld(HitInfo.Location);
 
@@ -265,23 +306,42 @@ bool UMDF_MiniGameComponent::TryBreach(const FHitResult& HitInfo, float DamageAm
 }
 
 // -----------------------------------------------------------------------------
-// [Step 6] 절단 실행 (정밀 절단 & 렌더링 보정)
+// [Step 6] 서버 전용 파괴 실행 (권한 체크 및 상태 전파)
 // -----------------------------------------------------------------------------
 void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
 {
-    if (!WeakSpots.IsValidIndex(WeakSpotIndex)) return;
-    if (WeakSpots[WeakSpotIndex].bIsBroken) return; 
+    // 서버가 아니면 실행하지 않음
+    if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+    if (!WeakSpots.IsValidIndex(WeakSpotIndex) || WeakSpots[WeakSpotIndex].bIsBroken) return; 
 
+    // 1. 서버에서 상태값을 변경함 (이 즉시 클라이언트들에게 데이터 복제가 시작됨)
     WeakSpots[WeakSpotIndex].bIsBroken = true;
+
+    // 2. 서버 본인도 자신의 화면(서버 뷰)에서 메쉬를 깎아야 함
+    ApplyVisualMeshCut(WeakSpotIndex);
+}
+
+// -----------------------------------------------------------------------------
+// [Step 7] 시각적 절단 로직 (서버/클라이언트 공통 실행)
+// - 실제 메쉬를 깎는 무거운 연산 부분입니다.
+// - 데이터가 아닌 '연산 방식'을 공유함으로써 네트워크 트래픽을 아낍니다.
+// -----------------------------------------------------------------------------
+void UMDF_MiniGameComponent::ApplyVisualMeshCut(int32 Index)
+{
+    if (!WeakSpots.IsValidIndex(Index)) return;
+
+    // 중복 연산 방지 (네트워크 지연으로 인해 여러 번 호출될 수 있음)
+    if (LocallyProcessedIndices.Contains(Index)) return;
+    LocallyProcessedIndices.Add(Index);
 
     UDynamicMeshComponent* DynComp = GetOwner() ? GetOwner()->FindComponentByClass<UDynamicMeshComponent>() : nullptr;
     if (!DynComp || !DynComp->GetDynamicMesh()) return;
 
     UDynamicMesh* TargetMesh = DynComp->GetDynamicMesh();
 
-    // 1. 절단용 칼 생성
+    // 1. 절단용 칼(ToolMesh) 생성
     UDynamicMesh* ToolMesh = NewObject<UDynamicMesh>(this); 
-    FBox CutBox = WeakSpots[WeakSpotIndex].LocalBox;
+    FBox CutBox = WeakSpots[Index].LocalBox;
     
     UGeometryScriptLibrary_MeshPrimitiveFunctions::AppendBox(
         ToolMesh, 
@@ -292,7 +352,7 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
         CutBox.GetExtent().Z * 2.0f
     );
 
-    // 2. 빼기 연산
+    // 2. 불리언 빼기 연산 실행
     FGeometryScriptMeshBooleanOptions BoolOptions;
     BoolOptions.bFillHoles = true;       
     BoolOptions.bSimplifyOutput = false; 
@@ -302,42 +362,26 @@ void UMDF_MiniGameComponent::ExecuteDestruction(int32 WeakSpotIndex)
         EGeometryScriptBooleanOperation::Subtract, BoolOptions
     );
     
-    // -------------------------------------------------------------------------
-    // [★핵심 수정] 인자 순서 변경 및 옵션 삭제
-    // -------------------------------------------------------------------------
-    
-    // 1. 법선(Normal) 재계산
+    // 3. 법선, UV, 탄젠트 재계산 (모든 환경에서 동일하게 수행)
     UGeometryScriptLibrary_MeshNormalsFunctions::RecomputeNormals(TargetMesh, FGeometryScriptCalculateNormalsOptions());
     
-    // 2. [수정됨] UV 재생성
     FBox MeshBounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(TargetMesh);
     FTransform BoxTransform = FTransform::Identity;
     BoxTransform.SetTranslation(MeshBounds.GetCenter());
     BoxTransform.SetScale3D(MeshBounds.GetSize());
 
-    // [★여기 수정] 인자 순서: (타겟, UV채널, 트랜스폼, 선택영역)
-    // 옵션 구조체 없이, 숫자 0(채널)을 두 번째에 넣어야 합니다.
-    UGeometryScriptLibrary_MeshUVFunctions::SetMeshUVsFromBoxProjection(
-        TargetMesh, 
-        0, // [중요] UV Channel Index (int)가 여기 와야 함!
-        BoxTransform, 
-        FGeometryScriptMeshSelection()
-    );
-
-    // 3. 탄젠트(Tangent) 재계산 (UV가 생겼으므로 정상 작동)
+    UGeometryScriptLibrary_MeshUVFunctions::SetMeshUVsFromBoxProjection(TargetMesh, 0, BoxTransform, FGeometryScriptMeshSelection());
     UGeometryScriptLibrary_MeshNormalsFunctions::ComputeTangents(TargetMesh, FGeometryScriptTangentsOptions());
     
     // -------------------------------------------------------------------------
-    // [★컬링/증발 해결] 렌더링 상태 및 바운드 강제 업데이트
+    // [렌더링/컬링 해결] 모든 클라이언트에서 화면을 최신 상태로 갱신
     // -------------------------------------------------------------------------
-    
-    // 4. 업데이트 및 상태 통보
-    DynComp->MarkRenderTransformDirty(); // 렌더 스레드에 트랜스폼 변화 알림
-    DynComp->NotifyMeshUpdated();        // 메쉬 데이터 변경에 따른 바운드 재계산 트리거
-    DynComp->UpdateCollision(true);      // 물리 충돌 갱신
-    DynComp->MarkRenderStateDirty();     // 렌더링 프록시 리셋 (컬링 문제의 핵심 해결책)
+    DynComp->MarkRenderTransformDirty(); 
+    DynComp->NotifyMeshUpdated();        
+    DynComp->UpdateCollision(true);      
+    DynComp->MarkRenderStateDirty(); // 가시성 상태 리셋 (중요)
 
-    UE_LOG(LogTemp, Warning, TEXT("[MDF] 정밀 절단 완료 (UV+Tangent+Bounds) (Index: %d)"), WeakSpotIndex);
+    UE_LOG(LogTemp, Log, TEXT("[MDF Sync] 로컬 절단 시각화 연산 완료 (Index: %d)"), Index);
 }
 
 // -----------------------------------------------------------------------------
@@ -351,7 +395,6 @@ bool UMDF_MiniGameComponent::IsOnBoundary(FVector LocalLoc, float Tolerance) con
     FBox Bounds = UGeometryScriptLibrary_MeshQueryFunctions::GetMeshBoundingBox(DynComp->GetDynamicMesh());
     FVector Scale = DynComp->GetComponentScale();
 
-    // 스케일을 고려한 오차 범위 계산
     float TolX = Tolerance / FMath::Max(Scale.X, 0.001f);
     float TolY = Tolerance / FMath::Max(Scale.Y, 0.001f);
     float TolZ = Tolerance / FMath::Max(Scale.Z, 0.001f);
@@ -378,9 +421,8 @@ FVector UMDF_MiniGameComponent::SnapToClosestBoundary(FVector LocalLoc) const
     float DistMinZ = FMath::Abs(LocalLoc.Z - Bounds.Min.Z);
     float DistMaxZ = FMath::Abs(LocalLoc.Z - Bounds.Max.Z);
 
-    float MinDist = FMath::Min(DistMinX, FMath::Min(DistMaxX, FMath::Min(DistMinY, FMath::Min(DistMaxY, FMath::Min(DistMinZ, DistMaxZ)))));
+    float MinDist = FMath::Min(FMath::Min(DistMinX, DistMaxX), FMath::Min(DistMinY, DistMaxY));
 
-    // 가장 가까운 면으로 좌표 강제 이동(Snap)
     if (MinDist == DistMinX) Snapped.X = Bounds.Min.X;
     else if (MinDist == DistMaxX) Snapped.X = Bounds.Max.X;
     else if (MinDist == DistMinY) Snapped.Y = Bounds.Min.Y;
@@ -398,7 +440,6 @@ float UMDF_MiniGameComponent::CalculateHPFromBox(const FBox& Box) const
     FVector Scale = GetOwner() ? GetOwner()->GetActorScale3D() : FVector::OneVector;
     float ScaleFactor = Scale.X * Scale.Y * Scale.Z;
     
-    // 부피에 비례하여 HP 설정 (너무 큰 영역은 부수기 힘들게)
     return 100.0f + (LocalVolume * ScaleFactor * HPDensityMultiplier * 0.005f);
 }
 
