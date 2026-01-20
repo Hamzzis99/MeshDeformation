@@ -205,6 +205,24 @@ void UMDF_DeformableComponent::ProcessDeformationBatch()
 }
 
 // -----------------------------------------------------------------------------
+// [자식 클래스용] 배칭 타이머 시작 헬퍼
+// -----------------------------------------------------------------------------
+void UMDF_DeformableComponent::StartBatchTimer()
+{
+    if (!BatchTimerHandle.IsValid())
+    {
+        float Delay = FMath::Max(0.001f, BatchProcessDelay);
+        GetWorld()->GetTimerManager().SetTimer(
+            BatchTimerHandle, 
+            this, 
+            &UMDF_DeformableComponent::ProcessDeformationBatch, 
+            Delay, 
+            false
+        );
+    }
+}
+
+// -----------------------------------------------------------------------------
 // [Step 8] 클라이언트 동기화 및 변형 적용 (핵심 로직)
 // -----------------------------------------------------------------------------
 void UMDF_DeformableComponent::OnRep_HitHistory()
@@ -270,8 +288,8 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
                     double Distance = FMath::Sqrt(DistSq);
                     double Falloff = 1.0 - (Distance * InverseRadius); // 중심일수록 1.0, 멀어지면 0.0
                     
-                    // 데미지에 따른 강도 조절
-                    float DamageFactor = Hit.Damage * 0.05f; 
+                    // [수정] 데미지에 따른 강도 조절 - 계수를 0.05 → 0.15로 상향
+                    float DamageFactor = Hit.Damage * 0.15f; 
                     float CurrentStrength = DeformStrength * DamageFactor;
 
                     // 데미지 타입별 가중치 (근접은 더 세게, 원거리는 약하게)

@@ -56,9 +56,11 @@ protected:
 
     /** * [Step 6 최적화] 모인 타격 지점들을 한 프레임의 끝에서 한 번에 연산 
      * (서버에서만 호출되어 RPC를 발송하는 역할로 변경 예정)
-     * [중요] 자식이 호출할 수 있도록 protected 유지
      */
     void ProcessDeformationBatch();
+    
+    /** [자식 클래스용] 배칭 타이머를 시작하는 헬퍼 함수 */
+    void StartBatchTimer();
 
     // -------------------------------------------------------------------------
     // [Step 8 핵심: 데이터 동기화 분리]
@@ -108,11 +110,11 @@ public:
 
     /** 타격 지점 주변의 변형 반경 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 반경"))
-    float DeformRadius = 30.0f;
+    float DeformRadius = 50.0f;
 
     /** 타격 시 안으로 밀려 들어가는 강도 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 강도"))
-    float DeformStrength = 5.0f;
+    float DeformStrength = 15.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|디버그", meta = (DisplayName = "디버그 포인트 표시"))
     bool bShowDebugPoints = true;

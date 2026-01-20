@@ -39,6 +39,7 @@ struct FWeakSpotData
 /**
  * [MDF_MiniGameComponent]
  * - 데디케이티드 서버 환경을 지원하도록 복제 로직이 추가됨
+ * - 클라이언트에서 마킹한 영역을 서버로 전송하는 RPC 포함
  */
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class MESHDEFORMATION_API UMDF_MiniGameComponent : public UMDF_DeformableComponent
@@ -85,6 +86,17 @@ protected:
     // [네트워크] 서버에서 데이터가 넘어왔을 때 클라이언트에서 실행될 함수
     UFUNCTION()
     void OnRep_WeakSpots();
+
+    // -------------------------------------------------------------------------
+    // [NEW] 클라이언트 → 서버 RPC (마킹 영역 전송)
+    // -------------------------------------------------------------------------
+    
+    /** 클라이언트가 마킹을 완료하면 서버에 약점 생성을 요청 */
+    UFUNCTION(Server, Reliable)
+    void Server_RequestCreateWeakSpot(FVector BoxMin, FVector BoxMax);
+
+    /** 실제 약점 생성 로직 (서버 전용) */
+    void Internal_CreateWeakSpot(const FBox& LocalBox);
 
 protected:
     bool bIsMarking = false;     
