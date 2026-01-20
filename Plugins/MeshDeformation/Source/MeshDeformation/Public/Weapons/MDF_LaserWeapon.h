@@ -43,8 +43,15 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Effects", meta = (DisplayName = "레이저 색상 (Debug)"))
 	FColor LaserColor;
 
+	/** true: 화면 중앙(크로스헤어) 기준, false: 총구(Muzzle) 기준 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Stats", meta = (DisplayName = "화면 중앙 기준 사용"))
+	bool bUseScreenCenter;
+
 private:
-	// [New] 현재 마킹 중인 벽 컴포넌트 (기억용)
+	// 현재 마킹 중인 벽 컴포넌트 (기억용)
 	UPROPERTY()
 	TObjectPtr<UMDF_MiniGameComponent> CurrentTargetComp;
+	
+	// 마지막 히트 위치 (EndMarking에서 사용)
+	FVector LastHitLocation;
 };

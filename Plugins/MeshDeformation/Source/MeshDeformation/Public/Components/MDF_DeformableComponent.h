@@ -110,11 +110,11 @@ public:
 
     /** 타격 지점 주변의 변형 반경 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 반경"))
-    float DeformRadius = 50.0f;
+    float DeformRadius = 100.0f;
 
     /** 타격 시 안으로 밀려 들어가는 강도 */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|설정", meta = (DisplayName = "변형 강도"))
-    float DeformStrength = 15.0f;
+    float DeformStrength = 30.0f;
 
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MeshDeformation|디버그", meta = (DisplayName = "디버그 포인트 표시"))
     bool bShowDebugPoints = true;

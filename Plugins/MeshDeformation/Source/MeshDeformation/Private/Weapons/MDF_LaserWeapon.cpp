@@ -5,6 +5,8 @@
 #include "Components/MDF_MiniGameComponent.h"
 #include "Engine/World.h"
 #include "DrawDebugHelpers.h"
+#include "GameFramework/PlayerController.h"
+#include "Camera/PlayerCameraManager.h"
 
 AMDF_LaserWeapon::AMDF_LaserWeapon()
 {
@@ -12,7 +14,8 @@ AMDF_LaserWeapon::AMDF_LaserWeapon()
     PrimaryActorTick.bStartWithTickEnabled = false; 
     BatteryDrainRate = 20.0f;
     LaserColor = FColor::Red;
-    FireRange = 3000.0f; 
+    FireRange = 3000.0f;
+    bUseScreenCenter = true;  // 기본값: 화면 중앙 기준
 }
 
 void AMDF_LaserWeapon::BeginPlay() { Super::BeginPlay(); }
@@ -30,9 +33,9 @@ void AMDF_LaserWeapon::StopFire()
     
     if (CurrentTargetComp)
     {
-       FVector EndPos = MuzzleLocation ? MuzzleLocation->GetComponentLocation() + (MuzzleLocation->GetForwardVector() * FireRange) : GetActorLocation();
-       CurrentTargetComp->EndMarking(EndPos);
-       CurrentTargetComp = nullptr;
+        // 마지막 히트 위치로 EndMarking
+        CurrentTargetComp->EndMarking(LastHitLocation);
+        CurrentTargetComp = nullptr;
     }
     UE_LOG(LogTemp, Log, TEXT("[레이저] 가동 중지"));
 }
@@ -48,9 +51,39 @@ void AMDF_LaserWeapon::Tick(float DeltaTime)
 
 void AMDF_LaserWeapon::ProcessLaserTrace()
 {
-    FVector Start = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
-    FVector Forward = MuzzleLocation ? MuzzleLocation->GetForwardVector() : GetActorForwardVector();
-    FVector End = Start + (Forward * FireRange);
+    FVector Start;
+    FVector End;
+    
+    // -------------------------------------------------------------------------
+    // [화면 중앙 기준 vs 총구 기준] 선택
+    // -------------------------------------------------------------------------
+    if (bUseScreenCenter)
+    {
+        // 화면 중앙(크로스헤어) 기준 레이캐스트
+        APawn* OwnerPawn = Cast<APawn>(GetOwner());
+        APlayerController* PC = OwnerPawn ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr;
+        
+        if (PC && PC->PlayerCameraManager)
+        {
+            Start = PC->PlayerCameraManager->GetCameraLocation();
+            FVector CameraForward = PC->PlayerCameraManager->GetCameraRotation().Vector();
+            End = Start + (CameraForward * FireRange);
+        }
+        else
+        {
+            // 폴백: 총구 기준
+            Start = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
+            FVector Forward = MuzzleLocation ? MuzzleLocation->GetForwardVector() : GetActorForwardVector();
+            End = Start + (Forward * FireRange);
+        }
+    }
+    else
+    {
+        // 기존 방식: 총구 기준
+        Start = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
+        FVector Forward = MuzzleLocation ? MuzzleLocation->GetForwardVector() : GetActorForwardVector();
+        End = Start + (Forward * FireRange);
+    }
 
     FHitResult HitResult;
     FCollisionQueryParams Params;
@@ -62,16 +95,20 @@ void AMDF_LaserWeapon::ProcessLaserTrace()
     // [디버깅] 레이저 궤적 그리기
     if (bHit)
     {
-        DrawDebugLine(GetWorld(), Start, HitResult.Location, LaserColor, false, -1.0f, 0, 2.0f);
-        // 맞은 지점에 진한 포인트 표시
+        // 화면 중앙 모드일 때는 총구에서 히트 지점까지 레이저 그리기 (시각적)
+        FVector LaserStart = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
+        DrawDebugLine(GetWorld(), LaserStart, HitResult.Location, LaserColor, false, -1.0f, 0, 2.0f);
         DrawDebugPoint(GetWorld(), HitResult.Location, 10.0f, FColor::Blue, false, -1.0f);
         
-        // [중요] 좌표 로그 출력 (매 프레임)
-        UE_LOG(LogTemp, Warning, TEXT("[LaserHit] World: %s / Actor: %s"), *HitResult.Location.ToString(), *HitResult.GetActor()->GetName());
+        LastHitLocation = HitResult.Location;  // 마지막 히트 위치 저장
     }
     else
     {
-        DrawDebugLine(GetWorld(), Start, End, LaserColor, false, -1.0f, 0, 1.0f);
+        FVector LaserStart = MuzzleLocation ? MuzzleLocation->GetComponentLocation() : GetActorLocation();
+        FVector LaserEnd = LaserStart + ((End - Start).GetSafeNormal() * FireRange);
+        DrawDebugLine(GetWorld(), LaserStart, LaserEnd, LaserColor, false, -1.0f, 0, 1.0f);
+        
+        LastHitLocation = LaserEnd;
     }
 
     // -------------------------------------------------------------------------
@@ -94,6 +131,15 @@ void AMDF_LaserWeapon::ProcessLaserTrace()
         else
         {
             CurrentTargetComp->UpdateMarking(HitResult.Location);
+        }
+    }
+    else
+    {
+        // 벽에서 벗어나면 마킹 종료
+        if (CurrentTargetComp)
+        {
+            CurrentTargetComp->EndMarking(LastHitLocation);
+            CurrentTargetComp = nullptr;
         }
     }
 }

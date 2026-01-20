@@ -72,9 +72,7 @@ protected:
 
 protected:
     // [유틸리티 함수]
-    bool IsOnBoundary(FVector LocalLoc, float Tolerance = 10.0f) const;
     float CalculateHPFromBox(const FBox& Box) const;
-    FVector SnapToClosestBoundary(FVector LocalLoc) const;
     FVector GetLocalLocationFromWorld(FVector WorldLoc) const;
     
     // [네트워크] 서버 권한으로 파괴를 확정하는 함수
@@ -101,10 +99,8 @@ protected:
 protected:
     bool bIsMarking = false;     
     bool bIsValidCut = false;    
-    bool bHasFirstPoint = false; 
 
     FVector LocalStartPoint;          
-    FVector LocalFirstBoundaryPoint;  
     FBox CurrentPreviewBox;           
 
     // [네트워크] ReplicatedUsing을 통해 상태 변화를 감시함
@@ -114,6 +110,26 @@ protected:
     // [네트워크] 클라이언트가 이미 깎은 인덱스를 추적하여 중복 연산 방지
     TArray<int32> LocallyProcessedIndices;
 
-    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config")
-    float HPDensityMultiplier = 0.1f; 
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "HP 밀도 배율"))
+    float HPDensityMultiplier = 0.1f;
+    
+    /** Z축(높이) 보정 기준 거리 - 끝점이 바닥에서 이 거리 이내면 바닥까지 자동 확장 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "Z축 보정 거리"))
+    float YAxisSnapThreshold = 30.0f;
+    
+    /** 절단 시 Z축 아래 방향으로 확장하는 거리 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "절단 Z축 확장 (아래)"))
+    float CutZExpansionDown = 20.0f;
+    
+    /** 절단 시 Z축 위 방향으로 확장하는 거리 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "절단 Z축 확장 (위)"))
+    float CutZExpansionUp = 10.0f;
+    
+    /** 절단 시 X축 좌측 방향으로 확장하는 거리 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "절단 X축 확장 (좌)"))
+    float CutXExpansionLeft = 10.0f;
+    
+    /** 절단 시 X축 우측 방향으로 확장하는 거리 */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "MDF|Config", meta = (DisplayName = "절단 X축 확장 (우)"))
+    float CutXExpansionRight = 10.0f; 
 };
