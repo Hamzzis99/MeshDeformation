@@ -247,28 +247,38 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
     // 2. 변경사항 없으면 스킵
     if (LastAppliedIndex == CurrentNum) return; 
 
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] ========== 변형 시작 =========="));
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] LastAppliedIndex: %d, CurrentNum: %d"), LastAppliedIndex, CurrentNum);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] DeformRadius: %.1f, DeformStrength: %.1f"), DeformRadius, DeformStrength);
+
     // 3. 변형 계산 준비
     const double RadiusSq = FMath::Square((double)DeformRadius);
     const double InverseRadius = 1.0 / (double)DeformRadius;
     
     double MinDebugDistSq = DBL_MAX;
     bool bAnyModified = false;
+    int32 ModifiedVertexCount = 0;
 
     // [디버그] 적용할 지점 표시
-    if (bShowDebugPoints)
+    for (int32 i = LastAppliedIndex; i < CurrentNum; ++i)
     {
-        for (int32 i = LastAppliedIndex; i < CurrentNum; ++i)
+        FVector WorldPos = MeshComp->GetComponentTransform().TransformPosition(HitHistory[i].LocalLocation);
+        UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] Hit[%d] LocalPos: %s, Damage: %.1f"), 
+            i, *HitHistory[i].LocalLocation.ToString(), HitHistory[i].Damage);
+        
+        if (bShowDebugPoints)
         {
-            FVector WorldPos = MeshComp->GetComponentTransform().TransformPosition(HitHistory[i].LocalLocation);
             DrawDebugPoint(GetWorld(), WorldPos, 15.0f, FColor::Blue, false, 5.0f);
         }
     }
 
     // 4. 메쉬 편집 시작 (Vertex 순회)
+    int32 TotalVertexCount = 0;
     MeshComp->GetDynamicMesh()->EditMesh([&](UE::Geometry::FDynamicMesh3& EditMesh) 
     {
         for (int32 VertexID : EditMesh.VertexIndicesItr())
         {
+            TotalVertexCount++;
             FVector3d VertexPos = EditMesh.GetVertex(VertexID);
             FVector3d TotalOffset(0.0, 0.0, 0.0);
             bool bModified = false;
@@ -309,14 +319,22 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
             {
                 EditMesh.SetVertex(VertexID, VertexPos + TotalOffset);
                 bAnyModified = true;
+                ModifiedVertexCount++;
             }
         }
     }, EDynamicMeshChangeType::GeneralEdit);
 
+    double MinDist = FMath::Sqrt(MinDebugDistSq);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] 총 버텍스: %d, 수정된 버텍스: %d"), TotalVertexCount, ModifiedVertexCount);
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] 최소 거리: %.2f, 반경: %.1f"), (float)MinDist, DeformRadius);
+    
     if (!bAnyModified)
     {
-        double MinDist = FMath::Sqrt(MinDebugDistSq);
-        // UE_LOG(LogTemp, Error, TEXT(">>> [변형 실패] 반경 내 버텍스 없음! (최소 거리: %.2f)"), (float)MinDist);
+        UE_LOG(LogTemp, Error, TEXT("[MDF Deform] >>> 변형 실패! 반경 내 버텍스 없음!"));
+    }
+    else
+    {
+        UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] >>> 변형 성공! %d개 버텍스 이동"), ModifiedVertexCount);
     }
 
     // 인덱스 업데이트 (다음엔 여기부터 처리)
@@ -336,6 +354,8 @@ void UMDF_DeformableComponent::OnRep_HitHistory()
     // 3. 충돌 및 렌더링 알림
     MeshComp->UpdateCollision();
     MeshComp->NotifyMeshUpdated();
+    
+    UE_LOG(LogTemp, Warning, TEXT("[MDF Deform] ========== 변형 완료 =========="));
 }
 
 // -----------------------------------------------------------------------------
